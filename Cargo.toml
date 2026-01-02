@@ -1,0 +1,28 @@
+[package]
+name = "fontsync"
+version = "0.1.0"
+edition = "2024"
+description = "Font synchronization tool with HTTP server and client"
+authors = ["Your Name"]
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+tokio-util = "0.7"
+warp = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json", "multipart"] }
+futures = "0.3"
+bytes = "1.0"
+mime = "0.3"
+mime_guess = "2.0"
+walkdir = "2.0"
+log = "0.4"
+env_logger = "0.10"
+indicatif = "0.17"
+anyhow = "1.0"
+thiserror = "1.0"
+tempfile = "3.0"
+dirs = "5.0"
