@@ -260,7 +260,7 @@ pub async fn get_server_fonts(server_url: &str) -> Result<FontList> {
     get_server_fonts_with_sha256(server_url).await
 }
 
-async fn get_server_fonts_with_sha256(server_url: &str) -> Result<FontList> {
+pub async fn get_server_fonts_with_sha256(server_url: &str) -> Result<FontList> {
     let client = reqwest::Client::new();
     let url = format!("{}/fonts", server_url);
     

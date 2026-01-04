@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use bytes::Buf;
 use futures::StreamExt;
-use log::{error, info};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{create_dir_all, File};
@@ -14,23 +15,8 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
-mod utils {
-    pub fn calculate_sha256(_path: &std::path::Path) -> anyhow::Result<String> {
-        Ok("placeholder_sha256".to_string())
-    }
-    
-    pub fn is_font_file(path: &std::path::Path) -> bool {
-        if let Some(ext) = path.extension() {
-            let ext_str = ext.to_string_lossy().to_lowercase();
-            matches!(
-                ext_str.as_str(),
-                "ttf" | "otf" | "woff" | "woff2" | "eot" | "ttc"
-            )
-        } else {
-            false
-        }
-    }
-}
+use crate::utils::{calculate_sha256, get_font_mime_type, is_font_file};
+use crate::websocket_server::{create_font_added_event, create_font_modified_event, WebSocketServer};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct FontInfo {
@@ -57,7 +43,26 @@ pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled:
     }
 
     let font_dir_arc = Arc::new(font_dir_path);
-    let ws_server: Option<()> = if ws_enabled { Some(()) } else { None };
+    
+    // Start WebSocket server if enabled
+    let ws_server = if ws_enabled {
+        let ws_addr: SocketAddr = format!("{}:{}", host, port + 1).parse()
+            .context("Failed to parse WebSocket address")?;
+        
+        let ws_server = Arc::new(WebSocketServer::new(ws_addr));
+        let ws_server_clone = Arc::clone(&ws_server);
+        
+        tokio::spawn(async move {
+            if let Err(e) = ws_server_clone.start().await {
+                error!("WebSocket server error: {}", e);
+            }
+        });
+        
+        info!("WebSocket server listening on ws://{}", ws_addr);
+        Some(ws_server)
+    } else {
+        None
+    };
 
     // Routes
     let font_dir_filter = warp::any().map(move || Arc::clone(&font_dir_arc));
@@ -85,17 +90,10 @@ pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled:
         .and(font_dir_filter.clone())
         .and_then(get_sha256_handler);
     
-    // Add WebSocket route if enabled
-    // WebSocket route would be configured here
-
     let routes = list_fonts
         .or(download_font)
         .or(upload_font)
-        .or(get_sha256);
-    
-    // WebSocket route would be added here if enabled
-    
-    let routes = routes
+        .or(get_sha256)
         .with(warp::cors().allow_any_origin())
         .with(warp::log("fontsync::server"));
 
@@ -103,14 +101,15 @@ pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled:
         .parse()
         .context("Failed to parse socket address")?;
 
-    info!("Server listening on http://{}", addr);
-    if ws_enabled {
-        info!("WebSocket server would be enabled on ws://{}", addr);
-    }
+    info!("HTTP server listening on http://{}", addr);
     
     warp::serve(routes).run(addr).await;
 
     Ok(())
+}
+
+pub async fn start_server_with_websocket(host: String, port: u16, font_dir: String, ws_enabled: bool) -> Result<()> {
+    start_server(host, port, font_dir, ws_enabled).await
 }
 
 async fn list_fonts_handler(
@@ -141,7 +140,7 @@ async fn list_fonts_impl(font_dir: &Path) -> Result<FontList> {
         let entry = entry.context("Failed to read directory entry")?;
         let path = entry.path();
 
-        if path.is_file() && utils::is_font_file(&path) {
+        if path.is_file() && is_font_file(&path) {
             let metadata = fs::metadata(&path).context("Failed to get file metadata")?;
             let name = path
                 .file_name()
@@ -149,12 +148,13 @@ async fn list_fonts_impl(font_dir: &Path) -> Result<FontList> {
                 .unwrap_or("unknown")
                 .to_string();
 
-            let mime_type = mime_guess::from_path(&path)
-                .first_or_octet_stream()
-                .to_string();
+            let mime_type = get_font_mime_type(&path);
 
-            let sha256 = utils::calculate_sha256(&path)
-                .unwrap_or_else(|_| String::new());
+            let sha256 = calculate_sha256(&path)
+                .unwrap_or_else(|e| {
+                    error!("Failed to calculate SHA256 for {:?}: {}", path, e);
+                    String::new()
+                });
 
             fonts.push(FontInfo {
                 name,
@@ -193,9 +193,7 @@ async fn download_font_handler(
             };
             
             // Determine content type
-            let content_type = mime_guess::from_path(&font_path)
-                .first_or_octet_stream()
-                .to_string();
+            let content_type = get_font_mime_type(&font_path);
 
             let stream = tokio_util::io::ReaderStream::new(file);
             let body = warp::hyper::Body::wrap_stream(stream);
@@ -231,7 +229,7 @@ async fn download_font_handler(
 async fn upload_font_handler(
     mut form: FormData,
     font_dir: Arc<PathBuf>,
-    ws_server: Option<()>,
+    ws_server: Option<Arc<WebSocketServer>>,
 ) -> Result<Box<dyn Reply>, Rejection> {
     while let Some(part) = form.next().await {
         match part {
@@ -245,8 +243,13 @@ async fn upload_font_handler(
                             info!("Uploaded font: {} (SHA256: {})", filename, sha256);
                             
                             // Broadcast WebSocket notification
-                            if let Some(_ws_server) = ws_server {
-                                // WebSocket notification would be sent here
+                            if let Some(server) = ws_server {
+                                let event = create_font_added_event(filename.clone(), sha256.clone(), 0);
+                                if let Err(e) = server.broadcast_font_event(event) {
+                                    warn!("Failed to broadcast WebSocket event: {}", e);
+                                } else {
+                                    info!("Broadcasted font upload event via WebSocket");
+                                }
                             }
                             
                             return Ok(Box::new(warp::reply::with_status(
@@ -307,7 +310,7 @@ async fn save_part_to_file(part: Part, path: &Path) -> Result<String> {
     file.flush().await?;
     
     // Calculate SHA256 after saving
-    let sha256 = utils::calculate_sha256(path)?;
+    let sha256 = calculate_sha256(path)?;
     Ok(sha256)
 }
 
@@ -327,7 +330,7 @@ async fn get_sha256_handler(
         )));
     }
 
-    match utils::calculate_sha256(&font_path) {
+    match calculate_sha256(&font_path) {
         Ok(sha256) => Ok(Box::new(warp::reply::json(&serde_json::json!({
             "filename": filename,
             "sha256": sha256,
