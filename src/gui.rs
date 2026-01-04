@@ -16,6 +16,22 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tray_item::{IconSource, TrayItem};
 
+#[cfg(target_os = "windows")]
+fn tray_icon_source() -> Option<IconSource> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, IDI_APPLICATION};
+    let icon = unsafe { LoadIconW(0, IDI_APPLICATION) };
+    if icon == 0 {
+        None
+    } else {
+        Some(IconSource::RawIcon(icon))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn tray_icon_source() -> Option<IconSource> {
+    Some(IconSource::Resource("preferences-desktop-font"))
+}
+
 use crate::utils::get_system_font_directories;
 
 #[derive(Clone)]
@@ -177,11 +193,16 @@ pub fn run_gui() -> Result<()> {
     wind.show();
 
     let (tray_sender, tray_receiver) = app::channel::<TrayEvent>();
-    let tray_icon = IconSource::Resource("preferences-desktop-font");
-    let mut tray = match TrayItem::new("FontSync", tray_icon) {
-        Ok(tray) => Some(tray),
-        Err(e) => {
-            eprintln!("Failed to create tray icon: {}", e);
+    let mut tray = match tray_icon_source() {
+        Some(icon) => match TrayItem::new("FontSync", icon) {
+            Ok(tray) => Some(tray),
+            Err(e) => {
+                eprintln!("Failed to create tray icon: {}", e);
+                None
+            }
+        },
+        None => {
+            eprintln!("Failed to create tray icon");
             None
         }
     };

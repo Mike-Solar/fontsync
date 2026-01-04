@@ -57,4 +57,6 @@ cargo test
 
 ## 说明
 
-- 托盘图标使用系统主题图标 `preferences-desktop-font`。如需自定义，可在 `src/gui.rs` 中修改。
+- Linux 托盘图标使用系统主题图标 `preferences-desktop-font`。
+- Windows 托盘图标使用系统默认应用图标（`IDI_APPLICATION`）。
+- 如需自定义，可在 `src/gui.rs` 中修改。
