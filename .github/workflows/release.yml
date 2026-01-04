@@ -9,18 +9,17 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  linux:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        arch: [x86_64, aarch64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -37,41 +36,129 @@ jobs:
             libpango1.0-dev \
             libcairo2-dev \
             libglib2.0-dev \
-            musl-tools
+            musl-tools \
+            patchelf \
+            desktop-file-utils \
+            zstd \
+            fakeroot \
+            libfuse2
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,aarch64-unknown-linux-gnu
+
+      - name: Install packaging tools (Linux x86_64)
+        if: matrix.arch == 'x86_64'
+        run: |
+          cargo install cargo-deb --locked
+          cargo install cargo-generate-rpm --locked
+
+      - name: Install cross (Linux aarch64)
+        if: matrix.arch == 'aarch64'
+        run: cargo install cross --locked
 
       - name: Build release
         run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
             cargo build --release --target x86_64-unknown-linux-musl --no-default-features
             cargo build --release
           else
-            cargo build --release
+            cross build --release --target aarch64-unknown-linux-musl --no-default-features
+            cross build --release --target aarch64-unknown-linux-gnu
           fi
 
       - name: Package (Linux)
-        if: runner.os == 'Linux'
         shell: bash
         run: |
           mkdir -p dist
-          cp target/x86_64-unknown-linux-musl/release/fontsync dist/fontsync-server
-          cp packaging/fontsync.service dist/
-          tar -czf dist/fontsync-linux-server-x86_64-musl.tar.gz -C dist fontsync-server fontsync.service
-          cp target/release/fontsync dist/fontsync-gui
-          tar -czf dist/fontsync-linux-gui-x86_64.tar.gz -C dist fontsync-gui
 
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path target\release\fontsync.exe -DestinationPath dist\fontsync-windows-x86_64.zip
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            cp target/x86_64-unknown-linux-musl/release/fontsync dist/fontsync-server
+            cp packaging/fontsync.service dist/
+            tar -czf dist/fontsync-linux-server-x86_64-musl.tar.gz -C dist fontsync-server fontsync.service
+
+            cp target/release/fontsync dist/fontsync-gui
+            tar -czf dist/fontsync-linux-gui-x86_64.tar.gz -C dist fontsync-gui
+
+            # AppImage
+            curl -L -o linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+            chmod +x linuxdeploy-x86_64.AppImage
+            APPDIR="$PWD/dist/appdir"
+            mkdir -p "$APPDIR/usr/bin"
+            cp target/release/fontsync "$APPDIR/usr/bin/fontsync"
+            ./linuxdeploy-x86_64.AppImage \
+              --appdir "$APPDIR" \
+              --executable "$APPDIR/usr/bin/fontsync" \
+              --desktop-file packaging/linux/fontsync.desktop \
+              --icon-file packaging/linux/fontsync.svg \
+              --output appimage
+            mv *.AppImage dist/fontsync-linux-gui-x86_64.AppImage
+
+            # deb
+            cargo deb --no-build
+            mv target/debian/*.deb dist/
+
+            # rpm
+            cargo generate-rpm -o dist/
+
+            # Arch pkg.tar.zst (in container)
+            mkdir -p packaging/arch/src
+            cp target/release/fontsync packaging/arch/src/fontsync
+            sed -i "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" packaging/arch/PKGBUILD
+            docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -lc "\
+              pacman -Sy --noconfirm base-devel zstd && \
+              useradd -m build && \
+              chown -R build:build /work && \
+              su build -c 'cd packaging/arch && makepkg -f --nodeps --noconfirm' \
+            "
+            mv packaging/arch/*.pkg.tar.zst dist/
+          else
+            cp target/aarch64-unknown-linux-musl/release/fontsync dist/fontsync-server
+            cp packaging/fontsync.service dist/
+            tar -czf dist/fontsync-linux-server-aarch64-musl.tar.gz -C dist fontsync-server fontsync.service
+
+            cp target/aarch64-unknown-linux-gnu/release/fontsync dist/fontsync-gui
+            tar -czf dist/fontsync-linux-gui-aarch64.tar.gz -C dist fontsync-gui
+          fi
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+            artifact: fontsync-windows-x86_64.zip
+          - arch: aarch64
+            target: aarch64-pc-windows-msvc
+            artifact: fontsync-windows-aarch64.zip
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Path target\${{ matrix.target }}\release\fontsync.exe -Destination dist\fontsync.exe
+          Compress-Archive -Path dist\fontsync.exe -DestinationPath dist\${{ matrix.artifact }}
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact }}

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Font synchronization tool with HTTP server and client"
 authors = ["Your Name"]
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
@@ -59,3 +59,20 @@ gui = ["fltk"]
 version = "1.4"
 optional = true
 features = ["fltk-bundled"]
+
+[package.metadata.deb]
+section = "utils"
+priority = "optional"
+maintainer = "FontSync <noreply@example.com>"
+assets = [
+  ["target/release/fontsync", "usr/bin/fontsync", "755"],
+  ["packaging/linux/fontsync.desktop", "usr/share/applications/fontsync.desktop", "644"],
+  ["packaging/linux/fontsync.svg", "usr/share/icons/hicolor/scalable/apps/fontsync.svg", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/fontsync", dest = "/usr/bin/fontsync", mode = "755" },
+  { source = "packaging/linux/fontsync.desktop", dest = "/usr/share/applications/fontsync.desktop", mode = "644" },
+  { source = "packaging/linux/fontsync.svg", dest = "/usr/share/icons/hicolor/scalable/apps/fontsync.svg", mode = "644" },
+]

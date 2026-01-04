@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=FontSync
+Exec=fontsync
+Icon=fontsync
+Terminal=false
+Categories=Utility;
