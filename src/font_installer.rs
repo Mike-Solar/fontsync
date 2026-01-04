@@ -1,11 +1,53 @@
 use anyhow::{Context, Result};
-use log::info;
+use log::{error, info};
 use std::path::Path;
 use std::process::Command;
 
+pub async fn install_font(font_path: &Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    return install_font_windows(font_path).await;
+    
+    #[cfg(target_os = "linux")]
+    return install_font_linux(font_path).await;
+    
+    #[cfg(target_os = "macos")]
+    return install_font_macos(font_path).await;
+    
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    return Err(anyhow::anyhow!("Font installation not supported on this OS"));
+}
+
+pub async fn install_fonts_from_directory(dir_path: &Path) -> Result<(usize, usize)> {
+    let mut installed = 0;
+    let mut failed = 0;
+    
+    use walkdir::WalkDir;
+    
+    for entry in WalkDir::new(dir_path)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.is_file() && is_font_file(path) {
+            match install_font(path).await {
+                Ok(_) => {
+                    info!("Successfully installed font: {:?}", path.file_name().unwrap_or_default());
+                    installed += 1;
+                }
+                Err(e) => {
+                    error!("Failed to install font {:?}: {}", path.file_name().unwrap_or_default(), e);
+                    failed += 1;
+                }
+            }
+        }
+    }
+    
+    Ok((installed, failed))
+}
 
 #[cfg(target_os = "windows")]
-pub async fn install_font(font_path: &Path) -> Result<()> {
+async fn install_font_windows(font_path: &Path) -> Result<()> {
     use std::fs;
     use windows::Win32::UI::WindowsAndMessaging::{AddFontResourceW, FR_PRIVATE};
 
@@ -55,8 +97,20 @@ pub async fn install_font(font_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn is_font_file(path: &Path) -> bool {
+    if let Some(ext) = path.extension() {
+        let ext_str = ext.to_string_lossy().to_lowercase();
+        matches!(
+            ext_str.as_str(),
+            "ttf" | "otf" | "woff" | "woff2" | "eot" | "ttc"
+        )
+    } else {
+        false
+    }
+}
+
 #[cfg(target_os = "linux")]
-pub async fn install_font(font_path: &Path) -> Result<()> {
+async fn install_font_linux(font_path: &Path) -> Result<()> {
     use std::fs;
     
     info!("Installing font on Linux: {:?}", font_path);
@@ -92,7 +146,7 @@ pub async fn install_font(font_path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-pub async fn install_font(font_path: &Path) -> Result<()> {
+async fn install_font_macos(font_path: &Path) -> Result<()> {
     use std::fs;
     
     info!("Installing font on macOS: {:?}", font_path);
@@ -155,10 +209,4 @@ fn update_font_cache() -> Result<()> {
     }
     
     Ok(())
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-pub async fn install_font(font_path: &Path) -> Result<()> {
-    info!("Font installation not supported on this OS: {:?}", font_path);
-    Err(anyhow::anyhow!("Font installation not supported on this OS"))
 }

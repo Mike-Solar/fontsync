@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
         Commands::Serve { host, port, font_dir } => {
             info!("Starting font server on {}:{}", host, port);
             info!("Font directory: {}", font_dir);
-            server::start_server(host, port, font_dir).await?;
+            server::start_server(host, port, font_dir, true).await?;
         }
         Commands::Client { server_url, local_dir, install, upload } => {
             info!("Starting font client");
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
             info!("Local directory: {}", local_dir);
             info!("Install fonts: {}", install);
             info!("Upload fonts: {}", upload);
-            client::run_client(server_url, local_dir, install, upload).await?;
+            client::run_client(server_url.clone(), local_dir, install, upload, false, server_url.replace("http", "ws"), false, true).await?;
         }
     }
     

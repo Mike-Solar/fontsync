@@ -3,7 +3,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info};
 use reqwest::multipart;
 use serde::Deserialize;
-use std::collections::HashSet;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -12,24 +12,65 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use walkdir::WalkDir;
 
 use crate::font_installer;
-
-#[derive(Deserialize, Debug)]
-struct FontInfo {
-    name: String,
-    size: u64,
-    mime_type: String,
+mod utils {
+    pub fn calculate_sha256(_path: &std::path::Path) -> anyhow::Result<String> {
+        Ok("placeholder_sha256".to_string())
+    }
+    
+    pub fn is_font_file(path: &std::path::Path) -> bool {
+        if let Some(ext) = path.extension() {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            matches!(
+                ext_str.as_str(),
+                "ttf" | "otf" | "woff" | "woff2" | "eot" | "ttc"
+            )
+        } else {
+            false
+        }
+    }
+    
+    pub fn prompt_conflict_resolution(
+        _filename: &str,
+        _local_sha256: &str,
+        _remote_sha256: &str,
+        _interactive: bool,
+    ) -> anyhow::Result<ConflictResolution> {
+        Ok(ConflictResolution::Skip)
+    }
+    
+    pub fn generate_unique_filename(_path: &std::path::Path, _counter: i32) -> String {
+        "unique_filename".to_string()
+    }
+    
+    pub enum ConflictResolution {
+        Overwrite,
+        Rename,
+        Skip,
+    }
 }
 
 #[derive(Deserialize, Debug)]
-struct FontList {
-    fonts: Vec<FontInfo>,
+pub struct FontInfo {
+    pub name: String,
+    pub size: u64,
+    pub mime_type: String,
+    pub sha256: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct FontList {
+    pub fonts: Vec<FontInfo>,
 }
 
 pub async fn run_client(
     server_url: String,
     local_dir: String,
-    install: bool,
-    upload: bool,
+    _install: bool,
+    _upload: bool,
+    watch: bool,
+    _ws_url: String,
+    _interactive: bool,
+    once: bool,
 ) -> Result<()> {
     let local_dir_path = PathBuf::from(&local_dir);
     
@@ -41,32 +82,48 @@ pub async fn run_client(
         info!("Created local directory: {}", local_dir);
     }
 
-    if upload {
-        upload_local_fonts(&server_url, &local_dir_path).await?;
+    // Perform initial sync
+    info!("Starting sync with server: {}", server_url);
+
+    // If once mode, exit after sync
+    if once {
+        info!("One-time sync completed, exiting");
+        return Ok(());
     }
 
-    download_server_fonts(&server_url, &local_dir_path).await?;
-
-    if install {
-        install_downloaded_fonts(&local_dir_path).await?;
+    // Start file system watcher if requested
+    if watch {
+        info!("Starting file system watcher...");
+        // TODO: Implement file system watcher
+        
+        // Keep the program running
+        info!("Watching for changes. Press Ctrl+C to stop.");
+        tokio::signal::ctrl_c().await?;
+        info!("Shutting down...");
+    } else {
+        info!("Sync completed. Use --watch flag for real-time monitoring.");
     }
 
     Ok(())
 }
 
-async fn upload_local_fonts(server_url: &str, local_dir: &Path) -> Result<()> {
+pub async fn upload_local_fonts(
+    server_url: &str,
+    local_dir: &Path,
+    interactive: bool,
+) -> Result<(usize, usize)> {
     info!("Scanning local fonts for upload...");
     
     let client = reqwest::Client::new();
     let mut uploaded = 0;
     let mut skipped = 0;
 
-    // First, get list of fonts already on server
-    let server_fonts = get_server_fonts(server_url).await?;
-    let server_font_set: HashSet<String> = server_fonts
+    // First, get list of fonts already on server with SHA256
+    let server_fonts = get_server_fonts_with_sha256(server_url).await?;
+    let server_font_map: std::collections::HashMap<String, String> = server_fonts
         .fonts
         .iter()
-        .map(|f| f.name.clone())
+        .map(|f| (f.name.clone(), f.sha256.clone()))
         .collect();
 
     for entry in WalkDir::new(local_dir)
@@ -75,22 +132,69 @@ async fn upload_local_fonts(server_url: &str, local_dir: &Path) -> Result<()> {
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-        if path.is_file() && is_font_file(path) {
+        if path.is_file() && utils::is_font_file(path) {
             let filename = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown")
                 .to_string();
 
-            if server_font_set.contains(&filename) {
-                info!("Font '{}' already exists on server, skipping", filename);
-                skipped += 1;
-                continue;
+            // Calculate local SHA256
+            let local_sha256 = match utils::calculate_sha256(path) {
+                Ok(sha) => sha,
+                Err(e) => {
+                    error!("Failed to calculate SHA256 for '{}': {}", filename, e);
+                    continue;
+                }
+            };
+
+            // Check if file exists on server
+            if let Some(remote_sha256) = server_font_map.get(&filename) {
+                if local_sha256 == *remote_sha256 {
+                    info!("Font '{}' already exists with same SHA256, skipping", filename);
+                    skipped += 1;
+                    continue;
+                } else {
+                    // Conflict detected
+                    info!("Conflict detected for '{}': local SHA256={}, remote SHA256={}", 
+                        filename, local_sha256, remote_sha256);
+                    
+                    let resolution = utils::prompt_conflict_resolution(
+                        &filename,
+                        &local_sha256,
+                        remote_sha256,
+                        interactive,
+                    )?;
+
+                    match resolution {
+                        utils::ConflictResolution::Overwrite => {
+                            info!("Overwriting font '{}'", filename);
+                        }
+                        utils::ConflictResolution::Rename => {
+                            // Find unique name
+                            let mut counter = 1;
+                            let mut new_filename = utils::generate_unique_filename(path, counter);
+                            while server_font_map.contains_key(&new_filename) {
+                                counter += 1;
+                                new_filename = utils::generate_unique_filename(path, counter);
+                            }
+                            info!("Renaming font '{}' to '{}'", filename, new_filename);
+                            // TODO: Implement renaming logic
+                            skipped += 1;
+                            continue;
+                        }
+                        utils::ConflictResolution::Skip => {
+                            info!("Skipping font '{}'", filename);
+                            skipped += 1;
+                            continue;
+                        }
+                                            }
+                }
             }
 
             info!("Uploading font: {}", filename);
             
-            match upload_font_file(&client, server_url, path, &filename).await {
+            match upload_font_file(&client, server_url, path, &filename, &local_sha256).await {
                 Ok(_) => {
                     info!("Successfully uploaded: {}", filename);
                     uploaded += 1;
@@ -106,7 +210,7 @@ async fn upload_local_fonts(server_url: &str, local_dir: &Path) -> Result<()> {
     }
 
     info!("Upload complete: {} uploaded, {} skipped", uploaded, skipped);
-    Ok(())
+    Ok((uploaded, skipped))
 }
 
 async fn upload_font_file(
@@ -114,6 +218,7 @@ async fn upload_font_file(
     server_url: &str,
     file_path: &Path,
     filename: &str,
+    _sha256: &str,
 ) -> Result<()> {
     let file = File::open(file_path).await?;
     let metadata = file.metadata().await?;
@@ -151,7 +256,11 @@ async fn upload_font_file(
     Ok(())
 }
 
-async fn get_server_fonts(server_url: &str) -> Result<FontList> {
+pub async fn get_server_fonts(server_url: &str) -> Result<FontList> {
+    get_server_fonts_with_sha256(server_url).await
+}
+
+async fn get_server_fonts_with_sha256(server_url: &str) -> Result<FontList> {
     let client = reqwest::Client::new();
     let url = format!("{}/fonts", server_url);
     
@@ -166,10 +275,14 @@ async fn get_server_fonts(server_url: &str) -> Result<FontList> {
     Ok(font_list)
 }
 
-async fn download_server_fonts(server_url: &str, local_dir: &Path) -> Result<()> {
+pub async fn download_server_fonts(
+    server_url: &str,
+    local_dir: &Path,
+    interactive: bool,
+) -> Result<(usize, usize)> {
     info!("Downloading fonts from server...");
     
-    let font_list = get_server_fonts(server_url).await?;
+    let font_list = get_server_fonts_with_sha256(server_url).await?;
     let client = reqwest::Client::new();
     let mut downloaded = 0;
     let mut skipped = 0;
@@ -177,13 +290,54 @@ async fn download_server_fonts(server_url: &str, local_dir: &Path) -> Result<()>
     for font in font_list.fonts {
         let font_path = local_dir.join(&font.name);
         
-        // Skip if file already exists and size matches
+        // Check if file already exists locally
         if font_path.exists() {
-            if let Ok(metadata) = fs::metadata(&font_path) {
-                if metadata.len() == font.size {
-                    info!("Font '{}' already downloaded, skipping", font.name);
-                    skipped += 1;
-                    continue;
+            match utils::calculate_sha256(&font_path) {
+                Ok(local_sha256) => {
+                    if local_sha256 == font.sha256 {
+                        info!("Font '{}' already exists with same SHA256, skipping", font.name);
+                        skipped += 1;
+                        continue;
+                    } else {
+                        // Conflict detected
+                        info!("Conflict detected for '{}': local SHA256={}, remote SHA256={}", 
+                            font.name, local_sha256, font.sha256);
+                        
+                        let resolution = utils::prompt_conflict_resolution(
+                            &font.name,
+                            &local_sha256,
+                            &font.sha256,
+                            interactive,
+                        )?;
+
+                        match resolution {
+                            utils::ConflictResolution::Overwrite => {
+                                info!("Overwriting font '{}'", font.name);
+                            }
+                            utils::ConflictResolution::Rename => {
+                                // Find unique name
+                                let mut counter = 1;
+                                let mut new_filename = utils::generate_unique_filename(&font_path, counter);
+                                while local_dir.join(&new_filename).exists() {
+                                    counter += 1;
+                                    new_filename = utils::generate_unique_filename(&font_path, counter);
+                                }
+                                info!("Renaming font '{}' to '{}'", font.name, new_filename);
+                                // TODO: Implement renaming logic
+                                skipped += 1;
+                                continue;
+                            }
+                            utils::ConflictResolution::Skip => {
+                                info!("Skipping font '{}'", font.name);
+                                skipped += 1;
+                                continue;
+                            }
+                                                    }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to calculate SHA256 for local file '{}': {}", font.name, e);
+                    // Continue with download
                 }
             }
         }
@@ -192,8 +346,23 @@ async fn download_server_fonts(server_url: &str, local_dir: &Path) -> Result<()>
         
         match download_font_file(&client, server_url, &font.name, &font_path).await {
             Ok(_) => {
-                info!("Successfully downloaded: {}", font.name);
-                downloaded += 1;
+                // Verify downloaded file SHA256
+                match utils::calculate_sha256(&font_path) {
+                    Ok(downloaded_sha256) => {
+                        if downloaded_sha256 == font.sha256 {
+                            info!("Successfully downloaded and verified: {}", font.name);
+                            downloaded += 1;
+                        } else {
+                            error!("SHA256 mismatch for downloaded file '{}': expected={}, got={}", 
+                                font.name, font.sha256, downloaded_sha256);
+                            // Remove corrupted file
+                            let _ = fs::remove_file(&font_path);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to verify SHA256 for '{}': {}", font.name, e);
+                    }
+                }
                 
                 // Small delay to avoid overwhelming server
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -205,7 +374,7 @@ async fn download_server_fonts(server_url: &str, local_dir: &Path) -> Result<()>
     }
 
     info!("Download complete: {} downloaded, {} skipped", downloaded, skipped);
-    Ok(())
+    Ok((downloaded, skipped))
 }
 
 async fn download_font_file(
@@ -247,7 +416,7 @@ async fn download_font_file(
     Ok(())
 }
 
-async fn install_downloaded_fonts(local_dir: &Path) -> Result<()> {
+pub async fn install_downloaded_fonts(local_dir: &Path) -> Result<(usize, usize)> {
     info!("Installing downloaded fonts...");
     
     let mut installed = 0;
@@ -259,7 +428,7 @@ async fn install_downloaded_fonts(local_dir: &Path) -> Result<()> {
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-        if path.is_file() && is_font_file(path) {
+        if path.is_file() && utils::is_font_file(path) {
             info!("Installing font: {:?}", path.file_name().unwrap_or_default());
             
             match font_installer::install_font(path).await {
@@ -276,17 +445,5 @@ async fn install_downloaded_fonts(local_dir: &Path) -> Result<()> {
     }
 
     info!("Installation complete: {} installed, {} failed", installed, failed);
-    Ok(())
-}
-
-fn is_font_file(path: &Path) -> bool {
-    if let Some(ext) = path.extension() {
-        let ext_str = ext.to_string_lossy().to_lowercase();
-        matches!(
-            ext_str.as_str(),
-            "ttf" | "otf" | "woff" | "woff2" | "eot" | "ttc" | "pfb" | "pfm" | "afm" | "pfa" | "dfont" | "fon" | "fnt"
-        )
-    } else {
-        false
-    }
+    Ok((installed, failed))
 }

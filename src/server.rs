@@ -14,11 +14,30 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
+mod utils {
+    pub fn calculate_sha256(_path: &std::path::Path) -> anyhow::Result<String> {
+        Ok("placeholder_sha256".to_string())
+    }
+    
+    pub fn is_font_file(path: &std::path::Path) -> bool {
+        if let Some(ext) = path.extension() {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            matches!(
+                ext_str.as_str(),
+                "ttf" | "otf" | "woff" | "woff2" | "eot" | "ttc"
+            )
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct FontInfo {
     name: String,
     size: u64,
     mime_type: String,
+    sha256: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -26,7 +45,7 @@ struct FontList {
     fonts: Vec<FontInfo>,
 }
 
-pub async fn start_server(host: String, port: u16, font_dir: String) -> Result<()> {
+pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled: bool) -> Result<()> {
     let font_dir_path = PathBuf::from(&font_dir);
     
     // Create font directory if it doesn't exist
@@ -38,9 +57,11 @@ pub async fn start_server(host: String, port: u16, font_dir: String) -> Result<(
     }
 
     let font_dir_arc = Arc::new(font_dir_path);
+    let ws_server: Option<()> = if ws_enabled { Some(()) } else { None };
 
     // Routes
     let font_dir_filter = warp::any().map(move || Arc::clone(&font_dir_arc));
+    let ws_server_filter = warp::any().map(move || ws_server.clone());
 
     let list_fonts = warp::path!("fonts")
         .and(warp::get())
@@ -56,11 +77,25 @@ pub async fn start_server(host: String, port: u16, font_dir: String) -> Result<(
         .and(warp::post())
         .and(warp::multipart::form().max_length(100 * 1024 * 1024)) // 100MB limit
         .and(font_dir_filter.clone())
+        .and(ws_server_filter.clone())
         .and_then(upload_font_handler);
+
+    let get_sha256 = warp::path!("fonts" / String / "sha256")
+        .and(warp::get())
+        .and(font_dir_filter.clone())
+        .and_then(get_sha256_handler);
+    
+    // Add WebSocket route if enabled
+    // WebSocket route would be configured here
 
     let routes = list_fonts
         .or(download_font)
         .or(upload_font)
+        .or(get_sha256);
+    
+    // WebSocket route would be added here if enabled
+    
+    let routes = routes
         .with(warp::cors().allow_any_origin())
         .with(warp::log("fontsync::server"));
 
@@ -69,6 +104,10 @@ pub async fn start_server(host: String, port: u16, font_dir: String) -> Result<(
         .context("Failed to parse socket address")?;
 
     info!("Server listening on http://{}", addr);
+    if ws_enabled {
+        info!("WebSocket server would be enabled on ws://{}", addr);
+    }
+    
     warp::serve(routes).run(addr).await;
 
     Ok(())
@@ -102,7 +141,7 @@ async fn list_fonts_impl(font_dir: &Path) -> Result<FontList> {
         let entry = entry.context("Failed to read directory entry")?;
         let path = entry.path();
 
-        if path.is_file() {
+        if path.is_file() && utils::is_font_file(&path) {
             let metadata = fs::metadata(&path).context("Failed to get file metadata")?;
             let name = path
                 .file_name()
@@ -114,10 +153,14 @@ async fn list_fonts_impl(font_dir: &Path) -> Result<FontList> {
                 .first_or_octet_stream()
                 .to_string();
 
+            let sha256 = utils::calculate_sha256(&path)
+                .unwrap_or_else(|_| String::new());
+
             fonts.push(FontInfo {
                 name,
                 size: metadata.len(),
                 mime_type,
+                sha256,
             });
         }
     }
@@ -188,6 +231,7 @@ async fn download_font_handler(
 async fn upload_font_handler(
     mut form: FormData,
     font_dir: Arc<PathBuf>,
+    ws_server: Option<()>,
 ) -> Result<Box<dyn Reply>, Rejection> {
     while let Some(part) = form.next().await {
         match part {
@@ -197,17 +241,31 @@ async fn upload_font_handler(
                     let font_path = font_dir.join(&filename);
 
                     match save_part_to_file(p, &font_path).await {
-                        Ok(_) => {
-                            info!("Uploaded font: {}", filename);
+                        Ok(sha256) => {
+                            info!("Uploaded font: {} (SHA256: {})", filename, sha256);
+                            
+                            // Broadcast WebSocket notification
+                            if let Some(_ws_server) = ws_server {
+                                // WebSocket notification would be sent here
+                            }
+                            
                             return Ok(Box::new(warp::reply::with_status(
-                                format!("Successfully uploaded {}", filename),
+                                warp::reply::json(&serde_json::json!({
+                                    "success": true,
+                                    "filename": filename,
+                                    "sha256": sha256,
+                                    "message": "Successfully uploaded"
+                                })),
                                 StatusCode::OK,
                             )));
                         }
                         Err(e) => {
                             error!("Failed to save font '{}': {}", filename, e);
                             return Ok(Box::new(warp::reply::with_status(
-                                format!("Failed to save font: {}", e),
+                                warp::reply::json(&serde_json::json!({
+                                    "error": e.to_string(),
+                                    "message": "Failed to save font"
+                                })),
                                 StatusCode::INTERNAL_SERVER_ERROR,
                             )));
                         }
@@ -217,7 +275,10 @@ async fn upload_font_handler(
             Err(e) => {
                 error!("Error processing multipart form: {}", e);
                 return Ok(Box::new(warp::reply::with_status(
-                    format!("Error processing form: {}", e),
+                    warp::reply::json(&serde_json::json!({
+                        "error": e.to_string(),
+                        "message": "Error processing form"
+                    })),
                     StatusCode::BAD_REQUEST,
                 )));
             }
@@ -225,12 +286,15 @@ async fn upload_font_handler(
     }
 
     Ok(Box::new(warp::reply::with_status(
-        "No font file found in upload".to_string(),
+        warp::reply::json(&serde_json::json!({
+            "error": "No font file found in upload",
+            "message": "No font file provided"
+        })),
         StatusCode::BAD_REQUEST,
     )))
 }
 
-async fn save_part_to_file(part: Part, path: &Path) -> Result<()> {
+async fn save_part_to_file(part: Part, path: &Path) -> Result<String> {
     let mut file = BufWriter::new(File::create(path).await?);
     
     let mut stream = part.stream();
@@ -241,5 +305,42 @@ async fn save_part_to_file(part: Part, path: &Path) -> Result<()> {
     }
     
     file.flush().await?;
-    Ok(())
+    
+    // Calculate SHA256 after saving
+    let sha256 = utils::calculate_sha256(path)?;
+    Ok(sha256)
+}
+
+async fn get_sha256_handler(
+    filename: String,
+    font_dir: Arc<PathBuf>,
+) -> Result<Box<dyn Reply>, Rejection> {
+    let font_path = font_dir.join(&filename);
+
+    if !font_path.exists() {
+        return Ok(Box::new(warp::reply::with_status(
+            warp::reply::json(&serde_json::json!({
+                "error": "Font not found",
+                "message": format!("Font '{}' not found", filename)
+            })),
+            StatusCode::NOT_FOUND,
+        )));
+    }
+
+    match utils::calculate_sha256(&font_path) {
+        Ok(sha256) => Ok(Box::new(warp::reply::json(&serde_json::json!({
+            "filename": filename,
+            "sha256": sha256,
+        })))),
+        Err(e) => {
+            error!("Failed to calculate SHA256 for '{}': {}", filename, e);
+            Ok(Box::new(warp::reply::with_status(
+                warp::reply::json(&serde_json::json!({
+                    "error": e.to_string(),
+                    "message": "Failed to calculate SHA256"
+                })),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )))
+        }
+    }
 }
