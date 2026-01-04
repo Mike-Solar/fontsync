@@ -49,7 +49,7 @@ pub async fn install_fonts_from_directory(dir_path: &Path) -> Result<(usize, usi
 #[cfg(target_os = "windows")]
 async fn install_font_windows(font_path: &Path) -> Result<()> {
     use std::fs;
-    use windows::Win32::UI::WindowsAndMessaging::{AddFontResourceW, FR_PRIVATE};
+    use windows_sys::Win32::Graphics::Gdi::AddFontResourceW;
 
     info!("Installing font on Windows: {:?}", font_path);
 
@@ -87,10 +87,10 @@ async fn install_font_windows(font_path: &Path) -> Result<()> {
 
     // Notify other applications about font change
     // Broadcast WM_FONTCHANGE message
-    use windows::Win32::UI::WindowsAndMessaging::{HWND_BROADCAST, SendMessageW, WM_FONTCHANGE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_BROADCAST, SendMessageW, WM_FONTCHANGE};
     
     unsafe {
-        SendMessageW(HWND_BROADCAST, WM_FONTCHANGE, None, None);
+        SendMessageW(HWND_BROADCAST, WM_FONTCHANGE, 0, 0);
         info!("Font change notification sent");
     }
 
