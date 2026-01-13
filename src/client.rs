@@ -12,42 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use walkdir::WalkDir;
 
 use crate::font_installer;
-mod utils {
-    pub fn calculate_sha256(_path: &std::path::Path) -> anyhow::Result<String> {
-        Ok("placeholder_sha256".to_string())
-    }
-    
-    pub fn is_font_file(path: &std::path::Path) -> bool {
-        if let Some(ext) = path.extension() {
-            let ext_str = ext.to_string_lossy().to_lowercase();
-            matches!(
-                ext_str.as_str(),
-                "ttf" | "otf" | "woff" | "woff2" | "eot" | "ttc"
-            )
-        } else {
-            false
-        }
-    }
-    
-    pub fn prompt_conflict_resolution(
-        _filename: &str,
-        _local_sha256: &str,
-        _remote_sha256: &str,
-        _interactive: bool,
-    ) -> anyhow::Result<ConflictResolution> {
-        Ok(ConflictResolution::Skip)
-    }
-    
-    pub fn generate_unique_filename(_path: &std::path::Path, _counter: i32) -> String {
-        "unique_filename".to_string()
-    }
-    
-    pub enum ConflictResolution {
-        Overwrite,
-        Rename,
-        Skip,
-    }
-}
+use crate::utils;
 
 #[derive(Deserialize, Debug)]
 pub struct FontInfo {
@@ -74,7 +39,7 @@ pub async fn run_client(
 ) -> Result<()> {
     let local_dir_path = PathBuf::from(&local_dir);
     
-    // Create local directory if it doesn't exist
+    // 本地目录不存在时创建
     if !local_dir_path.exists() {
         create_dir_all(&local_dir_path)
             .await
@@ -82,21 +47,21 @@ pub async fn run_client(
         info!("Created local directory: {}", local_dir);
     }
 
-    // Perform initial sync
+    // 执行初始同步
     info!("Starting sync with server: {}", server_url);
 
-    // If once mode, exit after sync
+    // 一次性模式同步后退出
     if once {
         info!("One-time sync completed, exiting");
         return Ok(());
     }
 
-    // Start file system watcher if requested
+    // 按需启动文件系统监听
     if watch {
         info!("Starting file system watcher...");
-        // TODO: Implement file system watcher
+        // 待办：实现文件系统监听
         
-        // Keep the program running
+        // 保持程序运行
         info!("Watching for changes. Press Ctrl+C to stop.");
         tokio::signal::ctrl_c().await?;
         info!("Shutting down...");
@@ -118,7 +83,7 @@ pub async fn upload_local_fonts(
     let mut uploaded = 0;
     let mut skipped = 0;
 
-    // First, get list of fonts already on server with SHA256
+    // 先获取服务器上已有字体及其 SHA256
     let server_fonts = get_server_fonts_with_sha256(server_url).await?;
     let server_font_map: std::collections::HashMap<String, String> = server_fonts
         .fonts
@@ -139,7 +104,7 @@ pub async fn upload_local_fonts(
                 .unwrap_or("unknown")
                 .to_string();
 
-            // Calculate local SHA256
+            // 计算本地 SHA256
             let local_sha256 = match utils::calculate_sha256(path) {
                 Ok(sha) => sha,
                 Err(e) => {
@@ -148,14 +113,14 @@ pub async fn upload_local_fonts(
                 }
             };
 
-            // Check if file exists on server
+            // 检查服务器是否已有该文件
             if let Some(remote_sha256) = server_font_map.get(&filename) {
                 if local_sha256 == *remote_sha256 {
                     info!("Font '{}' already exists with same SHA256, skipping", filename);
                     skipped += 1;
                     continue;
                 } else {
-                    // Conflict detected
+                    // 检测到冲突
                     info!("Conflict detected for '{}': local SHA256={}, remote SHA256={}", 
                         filename, local_sha256, remote_sha256);
                     
@@ -171,7 +136,7 @@ pub async fn upload_local_fonts(
                             info!("Overwriting font '{}'", filename);
                         }
                         utils::ConflictResolution::Rename => {
-                            // Find unique name
+                            // 生成唯一名称
                             let mut counter = 1;
                             let mut new_filename = utils::generate_unique_filename(path, counter);
                             while server_font_map.contains_key(&new_filename) {
@@ -179,7 +144,7 @@ pub async fn upload_local_fonts(
                                 new_filename = utils::generate_unique_filename(path, counter);
                             }
                             info!("Renaming font '{}' to '{}'", filename, new_filename);
-                            // TODO: Implement renaming logic
+                            // 待办：实现重命名逻辑
                             skipped += 1;
                             continue;
                         }
@@ -199,7 +164,7 @@ pub async fn upload_local_fonts(
                     info!("Successfully uploaded: {}", filename);
                     uploaded += 1;
                     
-                    // Small delay to avoid overwhelming server
+                    // 小延迟，避免请求过密
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 Err(e) => {
@@ -231,14 +196,14 @@ async fn upload_font_file(
             .progress_chars("#>-"),
     );
     
-    // Read file content
+    // 读取文件内容
     let mut buffer = Vec::with_capacity(metadata.len() as usize);
     let mut reader = tokio::io::BufReader::new(file);
     reader.read_to_end(&mut buffer).await?;
     
     pb.finish_and_clear();
     
-    // Create multipart form
+    // 创建 multipart 表单
     let part = multipart::Part::bytes(buffer)
         .file_name(filename.to_string())
         .mime_str("application/octet-stream")?;
@@ -290,7 +255,7 @@ pub async fn download_server_fonts(
     for font in font_list.fonts {
         let font_path = local_dir.join(&font.name);
         
-        // Check if file already exists locally
+        // 检查本地是否已存在
         if font_path.exists() {
             match utils::calculate_sha256(&font_path) {
                 Ok(local_sha256) => {
@@ -299,7 +264,7 @@ pub async fn download_server_fonts(
                         skipped += 1;
                         continue;
                     } else {
-                        // Conflict detected
+                        // 检测到冲突
                         info!("Conflict detected for '{}': local SHA256={}, remote SHA256={}", 
                             font.name, local_sha256, font.sha256);
                         
@@ -315,7 +280,7 @@ pub async fn download_server_fonts(
                                 info!("Overwriting font '{}'", font.name);
                             }
                             utils::ConflictResolution::Rename => {
-                                // Find unique name
+                                // 生成唯一名称
                                 let mut counter = 1;
                                 let mut new_filename = utils::generate_unique_filename(&font_path, counter);
                                 while local_dir.join(&new_filename).exists() {
@@ -323,7 +288,7 @@ pub async fn download_server_fonts(
                                     new_filename = utils::generate_unique_filename(&font_path, counter);
                                 }
                                 info!("Renaming font '{}' to '{}'", font.name, new_filename);
-                                // TODO: Implement renaming logic
+                                // 待办：实现重命名逻辑
                                 skipped += 1;
                                 continue;
                             }
@@ -337,7 +302,7 @@ pub async fn download_server_fonts(
                 }
                 Err(e) => {
                     error!("Failed to calculate SHA256 for local file '{}': {}", font.name, e);
-                    // Continue with download
+                    // 继续下载
                 }
             }
         }
@@ -346,7 +311,7 @@ pub async fn download_server_fonts(
         
         match download_font_file(&client, server_url, &font.name, &font_path).await {
             Ok(_) => {
-                // Verify downloaded file SHA256
+                // 校验已下载文件的 SHA256
                 match utils::calculate_sha256(&font_path) {
                     Ok(downloaded_sha256) => {
                         if downloaded_sha256 == font.sha256 {
@@ -355,7 +320,7 @@ pub async fn download_server_fonts(
                         } else {
                             error!("SHA256 mismatch for downloaded file '{}': expected={}, got={}", 
                                 font.name, font.sha256, downloaded_sha256);
-                            // Remove corrupted file
+                            // 移除损坏文件
                             let _ = fs::remove_file(&font_path);
                         }
                     }
@@ -364,7 +329,7 @@ pub async fn download_server_fonts(
                     }
                 }
                 
-                // Small delay to avoid overwhelming server
+                // 小延迟，避免请求过密
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             Err(e) => {

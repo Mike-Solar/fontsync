@@ -83,13 +83,13 @@ impl WebSocketServer {
         
         info!("WebSocket server listening on: {}", self.server_addr);
 
-        // Start heartbeat checker
+        // 启动心跳检查器
         let clients = Arc::clone(&self.clients);
         tokio::spawn(async move {
             Self::heartbeat_checker(clients).await;
         });
 
-        // Accept incoming connections
+        // 接受传入连接
         while let Ok((stream, addr)) = listener.accept().await {
             let clients = Arc::clone(&self.clients);
             let event_sender = self.event_sender.clone();
@@ -120,10 +120,10 @@ impl WebSocketServer {
 
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
         
-        // Generate client ID
+        // 生成客户端 ID
         let client_id = format!("client_{}", uuid::Uuid::new_v4());
         
-        // Register client
+        // 注册客户端
         let client_info = ClientInfo {
             addr,
             client_id: client_id.clone(),
@@ -134,7 +134,7 @@ impl WebSocketServer {
         
         info!("Registered client {} with ID: {}", addr, client_id);
 
-        // Send welcome message
+        // 发送欢迎消息
         let welcome_msg = WebSocketMessage::SyncComplete {
             client_id: client_id.clone(),
             success: true,
@@ -148,12 +148,12 @@ impl WebSocketServer {
             .await
             .context("Failed to send welcome message")?;
 
-        // Handle incoming messages and outgoing events
+        // 处理入站消息与广播事件
         let mut heartbeat_interval = interval(Duration::from_secs(30));
         
         loop {
             tokio::select! {
-                // Handle incoming WebSocket messages
+                // 处理客户端 WebSocket 消息
                 msg = ws_receiver.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
@@ -164,23 +164,23 @@ impl WebSocketServer {
                             }
                         }
                         Some(Ok(Message::Binary(_))) => {
-                            // Ignore binary messages
+                            // 忽略二进制消息
                         }
                         Some(Ok(Message::Close(_))) => {
                             info!("Client {} requested close", addr);
                             break;
                         }
                         Some(Ok(Message::Ping(_))) => {
-                            // Pong is handled automatically by tokio-tungstenite
+                            // Pong 由 tokio-tungstenite 自动处理
                         }
                         Some(Ok(Message::Pong(_))) => {
-                            // Update heartbeat on pong
+                            // 收到 Pong 时更新心跳
                             if let Some(client) = clients.read().get(&addr) {
                                 *client.last_heartbeat.write() = std::time::Instant::now();
                             }
                         }
                         Some(Ok(Message::Frame(_))) => {
-                            // Raw frame, ignore
+                            // 原始帧，忽略
                         }
                         Some(Err(e)) => {
                             error!("WebSocket error from {}: {}", addr, e);
@@ -193,7 +193,7 @@ impl WebSocketServer {
                     }
                 }
                 
-                // Handle broadcast events
+                // 处理广播事件
                 event = event_receiver.recv() => {
                     match event {
                         Ok(msg) => {
@@ -215,7 +215,7 @@ impl WebSocketServer {
                     }
                 }
                 
-                // Send heartbeat
+                // 发送心跳
                 _ = heartbeat_interval.tick() => {
                     let heartbeat_msg = WebSocketMessage::Heartbeat;
                     let json_msg = serde_json::to_string(&heartbeat_msg)
@@ -226,7 +226,7 @@ impl WebSocketServer {
                         break;
                     }
                     
-                    // Check if client is still alive
+                    // 检查客户端是否仍然存活
                     if let Some(client) = clients.read().get(&addr) {
                         let last_heartbeat = *client.last_heartbeat.read();
                         if last_heartbeat.elapsed() > Duration::from_secs(120) {
@@ -238,7 +238,7 @@ impl WebSocketServer {
             }
         }
 
-        // Remove client on disconnect
+        // 断开连接时移除客户端
         clients.write().remove(&addr);
         info!("Client {} disconnected", addr);
 
@@ -253,9 +253,9 @@ impl WebSocketServer {
     ) -> Result<()> {
         match msg {
             WebSocketMessage::FontListRequest => {
-                // Respond with current font list
+                // 返回当前字体列表
                 let response = WebSocketMessage::FontListResponse {
-                    fonts: Vec::new(), // This would be populated with actual font data
+                    fonts: Vec::new(), // 实际字体数据应在此处填充
                 };
                 
                 let json_msg = serde_json::to_string(&response)
@@ -266,12 +266,12 @@ impl WebSocketServer {
                     .context("Failed to send font list response")?;
             }
             WebSocketMessage::Heartbeat => {
-                // Update client heartbeat
+                // 更新客户端心跳
                 info!("Received heartbeat from {}", addr);
             }
             WebSocketMessage::SyncRequest { client_id } => {
                 info!("Sync request from client: {}", client_id);
-                // Handle sync request
+                // 处理同步请求
                 let response = WebSocketMessage::SyncComplete {
                     client_id: client_id.clone(),
                     success: true,
@@ -286,7 +286,7 @@ impl WebSocketServer {
                     .context("Failed to send sync response")?;
             }
             _ => {
-                // Broadcast other messages to all clients
+                // 将其他消息广播给所有客户端
                 let _ = event_sender.send(msg);
             }
         }
@@ -313,7 +313,7 @@ impl WebSocketServer {
                 }
             }
             
-            // Remove disconnected clients
+            // 移除已断开的客户端
             if !disconnected_clients.is_empty() {
                 let mut clients_guard = clients.write();
                 for addr in disconnected_clients {
@@ -340,7 +340,7 @@ pub async fn start_websocket_server(addr: SocketAddr) -> Result<()> {
     server.start().await
 }
 
-// Helper function to create font event messages
+// 创建字体事件消息的辅助函数
 pub fn create_font_added_event(filename: String, sha256: String, size: u64) -> WebSocketMessage {
     WebSocketMessage::FontAdded {
         filename,

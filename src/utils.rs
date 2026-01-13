@@ -138,7 +138,7 @@ pub fn get_system_font_directories() -> Vec<PathBuf> {
         dirs.push(PathBuf::from("/Library/Fonts"));
     }
 
-    // Filter out non-existent directories
+    // 过滤不存在的目录
     dirs.into_iter().filter(|p| p.exists()).collect()
 }
 
@@ -181,13 +181,13 @@ pub fn validate_font_file(path: &Path) -> Result<bool> {
         return Ok(false);
     }
     
-    // Try to read the first few bytes to check if it's a valid font file
+    // 读取前几个字节判断是否为有效字体文件
     match File::open(path) {
         Ok(mut file) => {
             let mut header = [0u8; 4];
             match file.read_exact(&mut header) {
                 Ok(_) => {
-                    // Basic validation for common font formats
+                    // 常见字体格式的基础校验
                     let is_valid = match &header {
                         [0x00, 0x01, 0x00, 0x00] => true, // TTF
                         [0x4F, 0x54, 0x54, 0x4F] => true, // OTF
@@ -216,6 +216,16 @@ pub fn sanitize_filename(filename: &str) -> String {
             }
         })
         .collect()
+}
+
+pub fn generate_unique_filename(path: &Path, counter: i32) -> String {
+    // 根据原始文件名生成带计数后缀的新文件名
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("font");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("ttf");
+    format!("{}-{}.{}", stem, counter, ext)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -278,7 +288,7 @@ mod tests {
         
         let result = calculate_sha256(temp_file.path()).unwrap();
         assert!(!result.is_empty());
-        assert_eq!(result.len(), 64); // SHA256 hex string is 64 characters
+        assert_eq!(result.len(), 64); // SHA256 十六进制字符串长度为 64
     }
 
     #[test]

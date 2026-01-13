@@ -28,20 +28,20 @@ cargo run
 ### 无 GUI 模式
 
 ```bash
-cargo run -- --no-gui serve --host 127.0.0.1 --port 8080 --font-dir ./fonts
+fontsync --no-gui serve --host 127.0.0.1 --port 8080 --font-dir ./fonts
 ```
 
 ### 常用命令
 
 ```bash
 # 启动服务端
-cargo run -- serve --host 127.0.0.1 --port 8080 --font-dir ./fonts
+fontsync serve --host 127.0.0.1 --port 8080 --font-dir ./fonts
 
 # 监控模式
-cargo run -- monitor --server-url ws://localhost:8080
+fontsync monitor --server-url ws://localhost:8080
 
 # 一次性同步
-cargo run -- sync --server-url http://localhost:8080 --local-dir ./local_fonts
+fontsync sync --server-url http://localhost:8080 --local-dir ./local_fonts
 ```
 
 ## 测试
@@ -49,19 +49,6 @@ cargo run -- sync --server-url http://localhost:8080 --local-dir ./local_fonts
 ```bash
 cargo test
 ```
-
-## GitHub Actions
-
-- 自动化测试：Windows / Linux
-- 自动打包发布：推送 `v*` 标签时生成 release，并上传二进制
-  - Linux 发布为 `x86_64-unknown-linux-musl` 静态二进制，并附带 `fontsync.service` 模板
-
-## 说明
-
-- Linux 托盘图标使用系统主题图标 `preferences-desktop-font`。
-- Windows 托盘图标使用系统默认应用图标（`IDI_APPLICATION`）。
-- 如需自定义，可在 `src/gui.rs` 中修改。
-
 ## systemd 服务端运行（Linux）
 
 发布的 Linux 压缩包内包含 `fontsync.service` 模板，可用于启动服务端。

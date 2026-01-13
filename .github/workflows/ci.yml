@@ -94,7 +94,7 @@ jobs:
           $localDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "fontsync_local_$([guid]::NewGuid())")
           $downloadDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "fontsync_download_$([guid]::NewGuid())")
           Add-Type -AssemblyName System.Drawing
-          $repoFonts = Get-ChildItem -Path (Join-Path $PWD "test_fonts") -Include *.ttf,*.otf -ErrorAction SilentlyContinue
+          $repoFonts = Get-ChildItem -Path (Join-Path $PWD "test_fonts") -Recurse -File -Include *.ttf,*.otf -ErrorAction SilentlyContinue
           $installedNames = (New-Object System.Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }
           $selected = @()
           foreach ($candidate in $repoFonts) {
@@ -122,18 +122,22 @@ jobs:
 
           try {
             cargo run -- --no-gui install --font-dir "$($localDir.FullName)"
+            Start-Sleep -Seconds 2
             $fontsDir = Join-Path $env:WINDIR "Fonts"
             if (-not (Test-Path (Join-Path $fontsDir $fontA))) { throw "Font install failed: $fontA" }
-            $installed = New-Object System.Drawing.Text.InstalledFontCollection
-            if (-not ($installed.Families.Name -contains $fontAFamily)) { throw "Font not registered: $fontAFamily" }
+            $fontReg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+            $fontAReg = $fontReg.PSObject.Properties | Where-Object { $_.Value -eq $fontA }
+            if (-not $fontAReg) { throw "Font not registered: $fontAFamily" }
 
             cargo run -- --no-gui sync --server-url http://127.0.0.1:8080 --local-dir "$($localDir.FullName)" --interactive false --upload true --download false --install false
             if (-not (Test-Path (Join-Path $serverDir.FullName $fontA))) { throw "Server missing uploaded font: $fontA" }
 
             cargo run -- --no-gui sync --server-url http://127.0.0.1:8080 --local-dir "$($downloadDir.FullName)" --interactive false --upload false --download true --install true
+            Start-Sleep -Seconds 2
             if (-not (Test-Path (Join-Path $fontsDir $fontB))) { throw "Font install failed: $fontB" }
-            $installed = New-Object System.Drawing.Text.InstalledFontCollection
-            if (-not ($installed.Families.Name -contains $fontBFamily)) { throw "Font not registered: $fontBFamily" }
+            $fontReg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+            $fontBReg = $fontReg.PSObject.Properties | Where-Object { $_.Value -eq $fontB }
+            if (-not $fontBReg) { throw "Font not registered: $fontBFamily" }
           } finally {
             if ($client -and -not $client.HasExited) { Stop-Process -Id $client.Id }
             if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id }

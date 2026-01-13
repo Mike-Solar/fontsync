@@ -36,7 +36,7 @@ impl WebSocketClient {
         
         let (mut ws_sender, _ws_receiver) = ws_stream.split();
         
-        // Send sync request
+        // 发送同步请求
         let sync_request = WebSocketMessage::SyncRequest {
             client_id: self.client_id.clone(),
         };
@@ -61,7 +61,7 @@ impl WebSocketClient {
         ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
         ws_url: String,
     ) -> Result<()> {
-        // Create download directory
+        // 创建下载目录
         tokio::fs::create_dir_all(&self.download_dir)
             .await
             .context("Failed to create download directory")?;
@@ -70,7 +70,7 @@ impl WebSocketClient {
 
         let (mut ws_sender, _ws_receiver) = ws_stream.split();
         
-        // Send initial sync request
+        // 发送初始同步请求
         let sync_request = WebSocketMessage::SyncRequest {
             client_id: self.client_id.clone(),
         };
@@ -82,7 +82,7 @@ impl WebSocketClient {
             .await
             .context("Failed to send sync request")?;
 
-        // Perform initial sync
+        // 执行初始同步
         self.perform_initial_sync().await?;
 
         info!("WebSocket client operations completed");
@@ -99,33 +99,33 @@ impl WebSocketClient {
                 info!("Server notified font added: {} ({} bytes, SHA256: {}...)", 
                     filename, size, &sha256[..16]);
                 
-                // Auto-download the new font
+                // 自动下载新字体
                 self.download_font(&filename, &sha256).await?;
             }
             WebSocketMessage::FontModified { filename, sha256, size } => {
                 info!("Server notified font modified: {} ({} bytes, SHA256: {}...)", 
                     filename, size, &sha256[..16]);
                 
-                // Download the updated font
+                // 下载更新后的字体
                 self.download_font(&filename, &sha256).await?;
             }
             WebSocketMessage::FontRemoved { filename } => {
                 info!("Server notified font removed: {}", filename);
                 
-                // Remove local copy if it exists and has the same SHA256
+                // 如果本地存在且 SHA256 一致则移除
                 self.handle_font_removal(&filename).await?;
             }
             WebSocketMessage::SyncComplete { client_id, success, message } => {
                 if client_id == self.client_id {
                     info!("Sync completed: {} - {}", success, message);
                     if success {
-                        // Perform initial sync
+                        // 执行初始同步
                         self.perform_initial_sync().await?;
                     }
                 }
             }
             WebSocketMessage::Heartbeat => {
-                // Respond with heartbeat
+                // 回复心跳
                 let heartbeat_msg = WebSocketMessage::Heartbeat;
                 let json_msg = serde_json::to_string(&heartbeat_msg)
                     .context("Failed to serialize heartbeat response")?;
@@ -135,7 +135,7 @@ impl WebSocketClient {
                     .context("Failed to send heartbeat response")?;
             }
             _ => {
-                // Handle other message types
+                // 处理其他消息类型
                 info!("Received message from server: {:?}", msg);
             }
         }
@@ -146,7 +146,7 @@ impl WebSocketClient {
     async fn download_font(&self, filename: &str, expected_sha256: &str) -> Result<()> {
         let font_path = self.download_dir.join(filename);
         
-        // Check if font already exists with correct SHA256
+        // 检查字体是否已存在且 SHA256 正确
         if font_path.exists() {
             if let Ok(local_sha256) = calculate_sha256(&font_path) {
                 if local_sha256 == expected_sha256 {
@@ -158,7 +158,7 @@ impl WebSocketClient {
 
         info!("Downloading font: {}", filename);
         
-        // Download from server
+        // 从服务器下载
         let server_url = self.server_url.clone();
         let client = reqwest::Client::new();
         let url = format!("{}/fonts/{}", server_url, filename);
@@ -173,7 +173,7 @@ impl WebSocketClient {
         let bytes = response.bytes().await
             .context("Failed to read font data")?;
         
-        // Verify SHA256
+        // 校验 SHA256
         let downloaded_sha256 = calculate_sha256_from_bytes(&bytes)?;
         if downloaded_sha256 != expected_sha256 {
             return Err(anyhow::anyhow!(
@@ -182,39 +182,39 @@ impl WebSocketClient {
             ));
         }
         
-        // Save font file
+        // 保存字体文件
         tokio::fs::write(&font_path, bytes)
             .await
             .context("Failed to save font file")?;
         
         info!("Successfully downloaded and verified font: {}", filename);
         
-        // Install the font
+        // 安装字体
         self.install_downloaded_font(&font_path).await?;
         
         Ok(())
     }
 
     async fn handle_font_removal(&self, filename: &str) -> Result<()> {
-        // Find and remove the font from system font directories
+        // 从系统字体目录中查找并移除字体
         for font_dir in &self.local_font_dirs {
             let font_path = font_dir.join(filename);
             if font_path.exists() {
-                // Verify it's the same file by checking if it's also in our download directory
+                // 通过下载目录中的文件校验是否同一字体
                 let download_path = self.download_dir.join(filename);
                 if download_path.exists() {
                     let system_sha256 = calculate_sha256(&font_path)?;
                     let download_sha256 = calculate_sha256(&download_path)?;
                     
                     if system_sha256 == download_sha256 {
-                        // Remove from system fonts
+                        // 从系统字体目录移除
                         tokio::fs::remove_file(&font_path)
                             .await
                             .context("Failed to remove font from system")?;
                         
                         info!("Removed font from system: {}", filename);
                         
-                        // Also remove from download directory
+                        // 同时移除下载目录中的文件
                         tokio::fs::remove_file(&download_path)
                             .await
                             .context("Failed to remove font from download directory")?;
@@ -244,7 +244,7 @@ impl WebSocketClient {
     async fn perform_initial_sync(&self) -> Result<()> {
         info!("Performing initial font sync...");
         
-        // Upload local fonts to server
+        // 上传本地字体到服务器
         let mut total_uploaded = 0;
         
         for font_dir in &self.local_font_dirs {
@@ -252,7 +252,7 @@ impl WebSocketClient {
                 let (uploaded, _) = upload_local_fonts(
                     &self.server_url,
                     font_dir,
-                    false, // Non-interactive mode for auto-sync
+                    false, // 自动同步使用非交互模式
                 ).await?;
                 
                 total_uploaded += uploaded;
@@ -261,16 +261,16 @@ impl WebSocketClient {
         
         info!("Upload sync complete: {} uploaded, {} skipped", total_uploaded, 0);
         
-        // Download fonts from server
+        // 从服务器下载字体
         let (downloaded, skipped) = download_server_fonts(
             &self.server_url,
             &self.download_dir,
-            false, // Non-interactive mode for auto-sync
+            false, // 自动同步使用非交互模式
         ).await?;
         
         info!("Download sync complete: {} downloaded, {} skipped", downloaded, skipped);
         
-        // Install downloaded fonts
+        // 安装已下载字体
         if downloaded > 0 {
             let (installed, failed) = font_installer::install_fonts_from_directory(&self.download_dir).await?;
             info!("Installation complete: {} installed, {} failed", installed, failed);
@@ -324,7 +324,7 @@ pub async fn start_websocket_client(
         }
     };
 
-    // Connect and run in background
+    // 连接并在后台运行
     let mut client_clone = client.clone();
     tokio::spawn(async move {
         if let Err(e) = client_clone.run_with_stream(ws_stream, ws_url).await {

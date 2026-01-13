@@ -34,7 +34,7 @@ struct FontList {
 pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled: bool) -> Result<()> {
     let font_dir_path = PathBuf::from(&font_dir);
     
-    // Create font directory if it doesn't exist
+    // 字体目录不存在时创建
     if !font_dir_path.exists() {
         create_dir_all(&font_dir_path)
             .await
@@ -52,7 +52,7 @@ pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled:
         None
     };
 
-    // Routes
+    // 路由
     let font_dir_filter = warp::any().map(move || Arc::clone(&font_dir_arc));
     let ws_server_opt = ws_server_data.as_ref().map(|(server, _)| Arc::clone(server));
     let ws_server_filter = warp::any().map(move || ws_server_opt.clone());
@@ -69,7 +69,7 @@ pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled:
 
     let upload_font = warp::path!("fonts")
         .and(warp::post())
-        .and(warp::multipart::form().max_length(100 * 1024 * 1024)) // 100MB limit
+        .and(warp::multipart::form().max_length(100 * 1024 * 1024)) // 100MB 限制
         .and(font_dir_filter.clone())
         .and(ws_server_filter.clone())
         .and_then(upload_font_handler);
@@ -190,7 +190,7 @@ async fn download_font_handler(
 
     match File::open(&font_path).await {
         Ok(file) => {
-            // Get file size for Content-Length header
+            // 获取文件大小用于 Content-Length
             let metadata = match tokio::fs::metadata(&font_path).await {
                 Ok(m) => m,
                 Err(_) => return Ok(Box::new(warp::reply::with_status(
@@ -199,7 +199,7 @@ async fn download_font_handler(
                 ))),
             };
             
-            // Determine content type
+            // 确定内容类型
             let content_type = get_font_mime_type(&font_path);
 
             let stream = tokio_util::io::ReaderStream::new(file);
@@ -249,7 +249,7 @@ async fn upload_font_handler(
                         Ok(sha256) => {
                             info!("Uploaded font: {} (SHA256: {})", filename, sha256);
                             
-                            // Broadcast WebSocket notification
+                            // 广播 WebSocket 通知
                             if let Some(server) = ws_server {
                                 let event = create_font_added_event(filename.clone(), sha256.clone(), 0);
                                 if let Err(e) = server.broadcast_font_event(event) {
@@ -316,7 +316,7 @@ async fn save_part_to_file(part: Part, path: &Path) -> Result<String> {
     
     file.flush().await?;
     
-    // Calculate SHA256 after saving
+    // 保存后计算 SHA256
     let sha256 = calculate_sha256(path)?;
     Ok(sha256)
 }

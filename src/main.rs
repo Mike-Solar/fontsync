@@ -31,101 +31,157 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start HTTP/WebSocket server for font synchronization
+    /// 启动用于字体同步的 HTTP/WebSocket 服务器
     Serve {
-        /// Server host address
+        /// 服务器主机地址
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
         
-        /// Server port
+        /// 服务器端口
         #[arg(long, default_value_t = 8080)]
         port: u16,
         
-        /// Font storage directory
+        /// 字体存储目录
         #[arg(long, default_value = "./fonts")]
         font_dir: String,
         
-        /// Enable WebSocket notifications
-        #[arg(long, default_value_t = true)]
+        /// 启用 WebSocket 通知
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            num_args = 0..=1,
+            default_missing_value = "true"
+        )]
         websocket: bool,
     },
     
-    /// Start font monitoring client
+    /// 启动字体监控客户端
     Monitor {
-        /// Server URL for WebSocket connection
+        /// WebSocket 连接的服务器 URL
         #[arg(long, default_value = "ws://localhost:8080")]
         server_url: String,
         
-        /// Directories to monitor (defaults to system font directories)
+        /// 监控目录（默认使用系统字体目录）
         #[arg(long, value_delimiter = ',')]
         watch_dirs: Option<Vec<String>>,
         
-        /// Client ID for identification
+        /// 用于识别的客户端 ID
         #[arg(long, default_value = "default_client")]
         client_id: String,
         
-        /// Enable interactive mode for conflict resolution
-        #[arg(long, default_value_t = false)]
+        /// 启用交互模式用于冲突处理
+        #[arg(
+            long,
+            default_value_t = false,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            num_args = 0..=1,
+            default_missing_value = "true"
+        )]
         interactive: bool,
     },
     
-    /// Perform one-time font synchronization
+    /// 执行一次性字体同步
     Sync {
-        /// Server URL
+        /// 服务器 URL
         #[arg(long, default_value = "http://localhost:8080")]
         server_url: String,
         
-        /// Local font directory
+        /// 本地字体目录
         #[arg(long, default_value = "./local_fonts")]
         local_dir: String,
         
-        /// Enable interactive mode for conflict resolution
-        #[arg(long, default_value_t = true)]
+        /// 启用交互模式用于冲突处理
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            num_args = 0..=1,
+            default_missing_value = "true"
+        )]
         interactive: bool,
         
-        /// Upload local fonts to server
-        #[arg(long, default_value_t = true)]
+        /// 上传本地字体到服务器
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            num_args = 0..=1,
+            default_missing_value = "true"
+        )]
         upload: bool,
         
-        /// Download fonts from server
-        #[arg(long, default_value_t = true)]
+        /// 从服务器下载字体
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            num_args = 0..=1,
+            default_missing_value = "true"
+        )]
         download: bool,
         
-        /// Install downloaded fonts
-        #[arg(long, default_value_t = true)]
+        /// 安装已下载字体
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            num_args = 0..=1,
+            default_missing_value = "true"
+        )]
         install: bool,
     },
     
-    /// Install fonts from a directory
+    /// 从目录安装字体
     Install {
-        /// Directory containing font files
+        /// 包含字体文件的目录
         #[arg(long, default_value = "./fonts")]
         font_dir: String,
         
-        /// Enable verbose installation logging
-        #[arg(long, default_value_t = false)]
+        /// 启用详细安装日志
+        #[arg(
+            long,
+            default_value_t = false,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            num_args = 0..=1,
+            default_missing_value = "true"
+        )]
         verbose: bool,
     },
     
-    /// List system font directories
+    /// 列出系统字体目录
     ListFonts {
-        /// Show detailed information including SHA256
-        #[arg(long, default_value_t = false)]
+        /// 显示包含 SHA256 的详细信息
+        #[arg(
+            long,
+            default_value_t = false,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::BoolishValueParser::new(),
+            num_args = 0..=1,
+            default_missing_value = "true"
+        )]
         detailed: bool,
     },
     
-    /// Start GUI interface (if compiled with GUI support)
+    /// 启动 GUI 界面（需要编译 GUI 支持）
     #[cfg(feature = "gui")]
     Gui {
-        /// Start in server mode
+        /// 以服务器模式启动
         #[arg(long)]
         server: bool,
         
-        /// Start in client mode
+        /// 以客户端模式启动
         #[arg(long)]
         client: bool,
         
-        /// Server URL for client mode
+        /// 客户端模式的服务器 URL
         #[arg(long, default_value = "http://localhost:8080")]
         server_url: String,
     },
@@ -135,7 +191,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let command = cli.command;
     
-    // Initialize logging
+    // 初始化日志
     if cli.verbose {
         env_logger::Builder::from_default_env()
             .filter_level(log::LevelFilter::Debug)
@@ -144,7 +200,7 @@ fn main() -> Result<()> {
         env_logger::init();
     }
     
-    // Handle GUI mode
+    // 处理 GUI 模式
     #[cfg(feature = "gui")]
     {
         if !cli.no_gui {
@@ -158,7 +214,7 @@ fn main() -> Result<()> {
                 return gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {}", e));
             }
 
-            // Check if GUI should be started by default
+            // 检查是否需要默认启动 GUI
             if std::env::var("FONT_SYNC_GUI").is_ok() {
                 info!("Starting GUI interface (via environment variable)...");
                 return gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {}", e));
@@ -174,11 +230,11 @@ fn main() -> Result<()> {
         }
     }
     
-    // Handle GUI checks for non-GUI builds
+    // 在非 GUI 构建中处理 GUI 检查
     #[cfg(not(feature = "gui"))]
     {
         if !cli.no_gui {
-            // Check if GUI should be started by default
+            // 检查是否需要默认启动 GUI
             if std::env::var("FONT_SYNC_GUI").is_ok() {
                 return Err(anyhow::anyhow!("GUI support not compiled. Build with --features gui"));
             }
@@ -252,7 +308,7 @@ fn main() -> Result<()> {
             
             #[cfg(not(feature = "gui"))]
             _ => {
-                // This should not happen because Gui command is not available in non-gui builds
+                // 非 GUI 构建不支持 Gui 命令，这里不应触发
                 unreachable!("GUI command received in non-GUI build");
             }
         }
@@ -269,26 +325,26 @@ async fn run_monitor_client(
 ) -> Result<()> {
     info!("Starting real-time font monitoring...");
     
-    // Create font monitor
+    // 创建字体监控器
     let mut monitor = font_monitor::FontMonitor::new();
     for path in watch_paths {
         monitor.add_watch_path(path);
     }
     
-    // Initial scan
+    // 初始扫描
     let initial_fonts = monitor.scan_fonts().await?;
     info!("Found {} fonts during initial scan", initial_fonts.len());
     
-    // Connect to WebSocket server
+    // 连接 WebSocket 服务器
     let _ws_client = websocket_client::start_websocket_client(server_url, client_id).await?;
     
-    // Start monitoring
+    // 开始监控
     let mut event_receiver = monitor.take_event_receiver()
         .context("Failed to get event receiver")?;
     
     monitor.start_monitoring().await?;
     
-    // Handle font events
+    // 处理字体事件
     tokio::spawn(async move {
         while let Some(event) = event_receiver.recv().await {
             match event {
@@ -313,7 +369,7 @@ async fn run_monitor_client(
     
     info!("Font monitoring started. Press Ctrl+C to stop.");
     
-    // Keep running until interrupted
+    // 持续运行直到被中断
     tokio::signal::ctrl_c().await?;
     info!("Shutting down font monitor...");
     
@@ -330,7 +386,7 @@ async fn run_sync_command(
 ) -> Result<()> {
     let local_dir_path = PathBuf::from(&local_dir);
     
-    // Create local directory if it doesn't exist
+    // 本地目录不存在时创建
     if !local_dir_path.exists() {
         tokio::fs::create_dir_all(&local_dir_path).await
             .context("Failed to create local directory")?;

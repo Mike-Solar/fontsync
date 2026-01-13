@@ -12,7 +12,7 @@ use crate::utils::{calculate_sha256, is_font_file};
 
 #[derive(Debug, Clone)]
 pub enum FontEvent {
-    Added(PathBuf, String), // path, sha256
+    Added(PathBuf, String), // 路径，sha256
     Modified(PathBuf, String),
     Removed(PathBuf),
 }
@@ -170,7 +170,7 @@ impl FontMonitor {
 
         // 保持 watcher 存活（直到 Ctrl+C）
         tokio::spawn(async move {
-            let _watcher = watcher; // Keep watcher in scope
+            let _watcher = watcher; // 保持 watcher 在作用域内
             tokio::signal::ctrl_c().await.ok();
             info!("File monitoring stopped");
         });
@@ -212,7 +212,7 @@ impl FontMonitor {
                         if let Ok(font_info) = Self::scan_single_font(&path).await {
                             if font_info.sha256 != existing_info.sha256 {
                                 let sha256 = font_info.sha256.clone();
-                                drop(cache); // Release read lock
+                                drop(cache); // 释放读锁
                                 font_cache.write().insert(path.clone(), font_info);
                                 
                                 info!(
@@ -226,10 +226,10 @@ impl FontMonitor {
                             }
                         }
                     } else {
-                        // New file not in cache
+                        // 缓存中不存在的新文件
                         if let Ok(font_info) = Self::scan_single_font(&path).await {
                             let sha256 = font_info.sha256.clone();
-                            drop(cache); // Release read lock
+                            drop(cache); // 释放读锁
                             font_cache.write().insert(path.clone(), font_info);
                             
                             info!(
@@ -272,7 +272,7 @@ impl FontMonitor {
 
             match event.kind {
                 notify::EventKind::Create(_) => {
-                    // For new files, we'll handle them in the next scan
+                    // 新文件在下次扫描时处理
                     info!("Font file created: {:?}", path.file_name().unwrap_or_default());
                 }
                 notify::EventKind::Modify(_) => {
@@ -335,7 +335,7 @@ pub async fn monitor_font_changes(
 
     monitor.start_monitoring().await?;
 
-    // Handle events
+    // 处理事件
     tokio::spawn(async move {
         while let Some(event) = event_receiver.recv().await {
             event_handler(event);

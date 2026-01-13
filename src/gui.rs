@@ -5,6 +5,7 @@ use fltk::{
     enums::{Align, Color, Event, Font, FrameType},
     frame::Frame,
     group::{Group, Pack, PackType},
+    image::PngImage,
     input::{Input, IntInput},
     prelude::*,
     text::{TextBuffer, TextDisplay},
@@ -16,20 +17,172 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tray_item::{IconSource, TrayItem};
 
+const LOGO_PNG: &[u8] = include_bytes!("../logo.png");
+const TRAY_ICON_SIZE: i32 = 32;
+
+fn load_logo_png() -> Option<PngImage> {
+    PngImage::from_data(LOGO_PNG).ok()
+}
+
 #[cfg(target_os = "windows")]
-fn tray_icon_source() -> Option<IconSource> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, IDI_APPLICATION};
-    let icon = unsafe { LoadIconW(0, IDI_APPLICATION) };
-    if icon == 0 {
+fn png_to_hicon(png_bytes: &[u8]) -> Option<windows_sys::Win32::UI::WindowsAndMessaging::HICON> {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateBitmap, CreateDIBSection, DeleteObject, GetDC, ReleaseDC, BI_BITFIELDS,
+        BITMAPV5HEADER, DIB_RGB_COLORS,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
+
+    // 将 PNG 解码为 RGBA，再转换为 Windows 需要的 BGRA 位图
+    let image = image::load_from_memory(png_bytes).ok()?.to_rgba8();
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let mut header: BITMAPV5HEADER = unsafe { std::mem::zeroed() };
+    header.bV5Size = std::mem::size_of::<BITMAPV5HEADER>() as u32;
+    header.bV5Width = width as i32;
+    header.bV5Height = -(height as i32);
+    header.bV5Planes = 1;
+    header.bV5BitCount = 32;
+    header.bV5Compression = BI_BITFIELDS;
+    header.bV5RedMask = 0x00FF0000;
+    header.bV5GreenMask = 0x0000FF00;
+    header.bV5BlueMask = 0x000000FF;
+    header.bV5AlphaMask = 0xFF000000;
+
+    let mut dib_data: *mut u8 = std::ptr::null_mut();
+    let hdc = unsafe { GetDC(0 as HWND) };
+    let color_bitmap = unsafe {
+        CreateDIBSection(
+            hdc,
+            &header as *const _ as *const _,
+            DIB_RGB_COLORS,
+            &mut dib_data as *mut _ as *mut _,
+            0,
+            0,
+        )
+    };
+    unsafe {
+        ReleaseDC(0 as HWND, hdc);
+    }
+    if color_bitmap == 0 || dib_data.is_null() {
+        return None;
+    }
+
+    let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+    for chunk in image.as_raw().chunks(4) {
+        bgra.push(chunk[2]);
+        bgra.push(chunk[1]);
+        bgra.push(chunk[0]);
+        bgra.push(chunk[3]);
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            bgra.as_ptr(),
+            dib_data,
+            bgra.len(),
+        );
+    }
+
+    let mask_bitmap = unsafe { CreateBitmap(width as i32, height as i32, 1, 1, std::ptr::null()) };
+    if mask_bitmap == 0 {
+        unsafe {
+            DeleteObject(color_bitmap);
+        }
+        return None;
+    }
+
+    let icon_info = ICONINFO {
+        fIcon: 1,
+        xHotspot: 0,
+        yHotspot: 0,
+        hbmMask: mask_bitmap,
+        hbmColor: color_bitmap,
+    };
+
+    let hicon = unsafe { CreateIconIndirect(&icon_info) };
+    unsafe {
+        DeleteObject(mask_bitmap);
+        DeleteObject(color_bitmap);
+    }
+
+    if hicon == 0 {
         None
     } else {
-        Some(IconSource::RawIcon(icon))
+        Some(hicon)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn set_window_icon_windows(window: &mut Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, ICON_BIG, ICON_SMALL, WM_SETICON};
+
+    if let Some(hicon) = png_to_hicon(LOGO_PNG) {
+        let hwnd = window.raw_handle();
+        if !hwnd.is_null() {
+            unsafe {
+                SendMessageW(hwnd as _, WM_SETICON, ICON_BIG as usize, hicon as isize);
+                SendMessageW(hwnd as _, WM_SETICON, ICON_SMALL as usize, hicon as isize);
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", all(target_os = "linux", feature = "ksni")))]
+fn png_to_tray_icon_data(png: &PngImage) -> Option<IconSource> {
+    let icon = png.copy_sized(TRAY_ICON_SIZE, TRAY_ICON_SIZE);
+    let depth = icon.depth();
+    let data = icon.to_rgb_data();
+    let (width, height) = (icon.data_w(), icon.data_h());
+    let rgba = match depth {
+        4 => data,
+        3 => {
+            let mut converted = Vec::with_capacity((width * height * 4) as usize);
+            for chunk in data.chunks(3) {
+                converted.extend_from_slice(chunk);
+                converted.push(255);
+            }
+            converted
+        }
+        _ => return None,
+    };
+
+    Some(IconSource::Data {
+        width,
+        height,
+        data: rgba,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn tray_icon_source() -> Option<IconSource> {
+    if let Some(hicon) = png_to_hicon(LOGO_PNG) {
+        return Some(IconSource::RawIcon(hicon));
+    }
+
+    use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, IDI_APPLICATION};
+    let icon = unsafe { LoadIconW(0, IDI_APPLICATION) };
+    if icon == 0 { None } else { Some(IconSource::RawIcon(icon)) }
 }
 
 #[cfg(not(target_os = "windows"))]
 fn tray_icon_source() -> Option<IconSource> {
-    Some(IconSource::Resource("preferences-desktop-font"))
+    let png = load_logo_png()?;
+    #[cfg(any(target_os = "macos", all(target_os = "linux", feature = "ksni")))]
+    {
+        png_to_tray_icon_data(&png)
+    }
+    #[cfg(all(target_os = "linux", feature = "libappindicator"))]
+    {
+        Some(IconSource::Resource("logo"))
+    }
+    #[cfg(all(target_os = "linux", not(any(feature = "ksni", feature = "libappindicator"))))]
+    {
+        let _ = png;
+        None
+    }
 }
 
 use crate::utils::get_system_font_directories;
@@ -70,18 +223,27 @@ pub fn run_gui() -> Result<()> {
         .with_size(800, 600)
         .with_label("FontSync - Font Synchronization Tool");
     wind.set_color(Color::from_rgb(247, 244, 236));
+    if let Some(png) = load_logo_png() {
+        // 使用项目根目录的 logo.png 作为应用图标
+        wind.set_icon(Some(png));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 额外设置窗口图标，覆盖系统默认图标
+        set_window_icon_windows(&mut wind);
+    }
     
     let state = AppState::new();
     let runtime = Arc::new(Runtime::new()?);
     
-    // Main layout
+    // 主布局
     let mut main_pack = Pack::default()
         .with_pos(10, 10)
         .with_size(780, 580);
     main_pack.set_type(PackType::Vertical);
     main_pack.set_spacing(8);
     
-    // Server section title + divider
+    // 服务端区块标题与分隔线
     let mut server_title = Frame::default()
         .with_size(0, 24)
         .with_label("服务端");
@@ -315,11 +477,11 @@ pub fn run_gui() -> Result<()> {
         }
     });
     
-    // Create status buffer
+    // 创建状态缓冲区
     let status_buffer = TextBuffer::default();
     status_text.set_buffer(status_buffer.clone());
     
-    // Helper function to update status
+    // 更新状态的辅助函数
     let update_status = {
         let status_buffer = status_buffer.clone();
         move |message: &str| {
@@ -330,7 +492,7 @@ pub fn run_gui() -> Result<()> {
             let current_text = buffer.text();
             let new_text = format!("{}{}", current_text, log_message);
             
-            // Limit log size to prevent memory issues
+            // 限制日志大小，避免内存问题
             let lines: Vec<&str> = new_text.lines().collect();
             let trimmed_text = if lines.len() > 1000 {
                 lines[lines.len() - 1000..].join("\n")
@@ -342,7 +504,7 @@ pub fn run_gui() -> Result<()> {
         }
     };
     
-    // Server button handlers
+    // 服务端按钮处理
     let state_clone = state.clone();
     let runtime_clone = runtime.clone();
     let update_status_for_start = update_status.clone();
@@ -383,7 +545,7 @@ pub fn run_gui() -> Result<()> {
         update_status("Server stopped");
     });
     
-    // Client button handlers
+    // 客户端按钮处理
     let state_clone = state.clone();
     let runtime_clone = runtime.clone();
     let update_status_for_connect = update_status.clone();
@@ -467,7 +629,7 @@ pub fn run_gui() -> Result<()> {
         }
     });
     
-    // Timer for periodic updates
+    // 定时器用于周期更新
     app::add_timeout3(1.0, {
         let state = state.clone();
         move |handle| {
@@ -475,11 +637,11 @@ pub fn run_gui() -> Result<()> {
             let client_connected = *state.client_connected.lock().unwrap();
             
             if server_running {
-                // Update server status
+                // 更新服务端状态
             }
             
             if client_connected {
-                // Update client status
+                // 更新客户端状态
             }
             
             if server_running || client_connected {
@@ -517,7 +679,7 @@ async fn connect_client_internal(server_url: String) -> Result<()> {
     let client_id = format!("gui_client_{}", uuid::Uuid::new_v4());
     let _client = websocket_client::start_websocket_client(server_url, client_id).await?;
     
-    // The client runs in the background
+    // 客户端在后台运行
     Ok(())
 }
 
@@ -534,7 +696,7 @@ async fn perform_one_time_sync(server_url: String) -> Result<(usize, usize)> {
     let mut total_uploaded = 0;
     let mut total_downloaded = 0;
     
-    // Upload local fonts
+    // 上传本地字体
     for font_dir in local_font_dirs {
         if font_dir.exists() {
             let (uploaded, _) = client::upload_local_fonts(&server_url, &font_dir, false).await?;
@@ -542,11 +704,11 @@ async fn perform_one_time_sync(server_url: String) -> Result<(usize, usize)> {
         }
     }
     
-    // Download server fonts
+    // 下载服务器字体
     let (downloaded, _) = client::download_server_fonts(&server_url, &download_dir, false).await?;
     total_downloaded += downloaded;
     
-    // Install downloaded fonts
+    // 安装已下载字体
     if total_downloaded > 0 {
         client::install_downloaded_fonts(&download_dir).await?;
     }
