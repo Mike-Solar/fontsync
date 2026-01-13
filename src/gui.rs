@@ -2,10 +2,10 @@
 use fltk::{
     app,
     button::Button,
-    enums::{Align, Event, Font},
+    enums::{Align, Color, Event, Font, FrameType},
     frame::Frame,
     group::{Group, Pack, PackType},
-    input::{FileInput, Input, IntInput},
+    input::{Input, IntInput},
     prelude::*,
     text::{TextBuffer, TextDisplay},
     window::Window,
@@ -64,127 +64,212 @@ enum TrayEvent {
 
 pub fn run_gui() -> Result<()> {
     let app = app::App::default();
+    app::set_scheme(app::Scheme::Gtk);
     
     let mut wind = Window::default()
         .with_size(800, 600)
         .with_label("FontSync - Font Synchronization Tool");
+    wind.set_color(Color::from_rgb(247, 244, 236));
     
     let state = AppState::new();
     let runtime = Arc::new(Runtime::new()?);
     
     // Main layout
     let mut main_pack = Pack::default()
-        .with_size(780, 580)
-        .center_of(&wind);
+        .with_pos(10, 10)
+        .with_size(780, 580);
     main_pack.set_type(PackType::Vertical);
-    main_pack.set_spacing(10);
+    main_pack.set_spacing(8);
     
-    // Title
-    let mut title_frame = Frame::default()
-        .with_size(0, 40)
-        .with_label("FontSync");
-    title_frame.set_label_size(20);
-    title_frame.set_align(Align::Center);
-    
-    // Server section
-    let mut server_group = Group::default()
-        .with_size(0, 150)
-        .with_label("Server Settings");
+    // Server section title + divider
+    let mut server_title = Frame::default()
+        .with_size(0, 24)
+        .with_label("服务端");
+    server_title.set_label_size(17);
+    server_title.set_label_font(Font::HelveticaBold);
+    server_title.set_label_color(Color::from_rgb(40, 40, 40));
+    server_title.set_align(Align::Left | Align::Inside);
+
+    let mut server_divider = Frame::default().with_size(0, 1);
+    server_divider.set_frame(FrameType::FlatBox);
+    server_divider.set_color(Color::from_rgb(200, 200, 200));
     
     let mut server_pack = Pack::default()
-        .with_size(760, 130)
-        .center_of(&server_group);
+        .with_size(0, 140);
     server_pack.set_type(PackType::Vertical);
-    server_pack.set_spacing(5);
+    server_pack.set_spacing(6);
     
+    let mut server_row1 = Pack::default().with_size(0, 28);
+    server_row1.set_type(PackType::Horizontal);
+    server_row1.set_spacing(16);
+    let mut server_host_label = Frame::default()
+        .with_size(90, 28)
+        .with_label("监听地址");
+    server_host_label.set_label_size(12);
+    server_host_label.set_align(Align::Left | Align::Inside);
     let mut server_host_input = Input::default()
-        .with_size(0, 30)
-        .with_label("Host:");
+        .with_size(220, 28);
+    server_host_input.set_text_size(13);
     server_host_input.set_value("127.0.0.1");
+    server_row1.end();
     
+    let mut server_row2 = Pack::default().with_size(0, 28);
+    server_row2.set_type(PackType::Horizontal);
+    server_row2.set_spacing(16);
+    let mut server_port_label = Frame::default()
+        .with_size(90, 28)
+        .with_label("监听端口");
+    server_port_label.set_label_size(12);
+    server_port_label.set_align(Align::Left | Align::Inside);
     let mut server_port_input = IntInput::default()
-        .with_size(0, 30)
-        .with_label("Port:");
+        .with_size(220, 28);
+    server_port_input.set_text_size(13);
     server_port_input.set_value("8080");
+    server_row2.end();
     
-    let mut server_font_dir_input = FileInput::default()
-        .with_size(0, 30)
-        .with_label("Font Directory:");
+    let mut server_row3 = Pack::default().with_size(0, 28);
+    server_row3.set_type(PackType::Horizontal);
+    server_row3.set_spacing(16);
+    let mut server_dir_label = Frame::default()
+        .with_size(90, 28)
+        .with_label("字体目录");
+    server_dir_label.set_label_size(12);
+    server_dir_label.set_align(Align::Left | Align::Inside);
+    let mut server_font_dir_input = Input::default()
+        .with_size(360, 28);
+    server_font_dir_input.set_text_size(13);
     server_font_dir_input.set_value("./fonts");
+    server_row3.end();
     
-    let mut server_button_pack = Pack::default()
-        .with_size(0, 40);
+    let mut server_button_pack = Pack::default().with_size(0, 30);
     server_button_pack.set_type(PackType::Horizontal);
-    server_button_pack.set_spacing(10);
+    server_button_pack.set_spacing(16);
     
     let mut start_server_btn = Button::default()
-        .with_size(120, 30)
-        .with_label("Start Server");
+        .with_size(96, 28)
+        .with_label("开启服务");
+    start_server_btn.set_color(Color::from_rgb(255, 255, 255));
+    start_server_btn.set_label_color(Color::from_rgb(49, 99, 239));
+    start_server_btn.set_frame(FrameType::BorderBox);
     
     let mut stop_server_btn = Button::default()
-        .with_size(120, 30)
-        .with_label("Stop Server");
+        .with_size(96, 28)
+        .with_label("停止服务");
+    stop_server_btn.set_color(Color::from_rgb(255, 255, 255));
+    stop_server_btn.set_label_color(Color::from_rgb(49, 99, 239));
+    stop_server_btn.set_frame(FrameType::BorderBox);
     stop_server_btn.deactivate();
 
     let mut stop_server_btn_for_start = stop_server_btn.clone();
     
     server_button_pack.end();
     server_pack.end();
-    server_group.end();
     
-    // Client section
-    let mut client_group = Group::default()
-        .with_size(0, 150)
-        .with_label("Client Settings");
+    let mut section_spacer = Frame::default().with_size(0, 6);
+    section_spacer.set_frame(FrameType::NoBox);
+    
+    let mut client_title = Frame::default()
+        .with_size(0, 24)
+        .with_label("客户端");
+    client_title.set_label_size(17);
+    client_title.set_label_font(Font::HelveticaBold);
+    client_title.set_label_color(Color::from_rgb(40, 40, 40));
+    client_title.set_align(Align::Left | Align::Inside);
+
+    let mut client_divider = Frame::default().with_size(0, 1);
+    client_divider.set_frame(FrameType::FlatBox);
+    client_divider.set_color(Color::from_rgb(200, 200, 200));
     
     let mut client_pack = Pack::default()
-        .with_size(760, 130)
-        .center_of(&client_group);
+        .with_size(0, 120);
     client_pack.set_type(PackType::Vertical);
-    client_pack.set_spacing(5);
+    client_pack.set_spacing(6);
     
-    let mut server_url_input = Input::default()
-        .with_size(0, 30)
-        .with_label("Server URL:");
-    server_url_input.set_value("http://localhost:8080");
+    let mut client_row1 = Pack::default().with_size(0, 28);
+    client_row1.set_type(PackType::Horizontal);
+    client_row1.set_spacing(16);
+    let mut client_host_label = Frame::default()
+        .with_size(90, 28)
+        .with_label("服务器地址");
+    client_host_label.set_label_size(12);
+    client_host_label.set_align(Align::Left | Align::Inside);
+    let mut client_host_input = Input::default()
+        .with_size(220, 28);
+    client_host_input.set_text_size(13);
+    client_host_input.set_value("127.0.0.1");
+    client_row1.end();
+
+    let mut client_row2 = Pack::default().with_size(0, 28);
+    client_row2.set_type(PackType::Horizontal);
+    client_row2.set_spacing(16);
+    let mut client_port_label = Frame::default()
+        .with_size(90, 28)
+        .with_label("服务器端口");
+    client_port_label.set_label_size(12);
+    client_port_label.set_align(Align::Left | Align::Inside);
+    let mut client_port_input = IntInput::default()
+        .with_size(220, 28);
+    client_port_input.set_text_size(13);
+    client_port_input.set_value("8080");
+    client_row2.end();
     
-    let mut client_button_pack = Pack::default()
-        .with_size(0, 40);
+    let mut client_button_pack = Pack::default().with_size(0, 30);
     client_button_pack.set_type(PackType::Horizontal);
-    client_button_pack.set_spacing(10);
+    client_button_pack.set_spacing(16);
     
     let mut connect_client_btn = Button::default()
-        .with_size(120, 30)
-        .with_label("Connect Client");
+        .with_size(96, 28)
+        .with_label("开始同步");
+    connect_client_btn.set_color(Color::from_rgb(255, 255, 255));
+    connect_client_btn.set_label_color(Color::from_rgb(49, 99, 239));
+    connect_client_btn.set_frame(FrameType::BorderBox);
     
     let mut disconnect_client_btn = Button::default()
-        .with_size(120, 30)
-        .with_label("Disconnect");
+        .with_size(96, 28)
+        .with_label("停止同步");
+    disconnect_client_btn.set_color(Color::from_rgb(255, 255, 255));
+    disconnect_client_btn.set_label_color(Color::from_rgb(49, 99, 239));
+    disconnect_client_btn.set_frame(FrameType::BorderBox);
     disconnect_client_btn.deactivate();
     
     let mut sync_once_btn = Button::default()
-        .with_size(120, 30)
-        .with_label("Sync Once");
+        .with_size(96, 28)
+        .with_label("仅同步一次");
+    sync_once_btn.set_color(Color::from_rgb(255, 255, 255));
+    sync_once_btn.set_label_color(Color::from_rgb(49, 99, 239));
+    sync_once_btn.set_frame(FrameType::BorderBox);
 
     let mut disconnect_client_btn_for_connect = disconnect_client_btn.clone();
     let mut sync_once_btn_for_connect = sync_once_btn.clone();
     let mut sync_once_btn_for_disconnect = sync_once_btn.clone();
-    let server_url_input_for_connect = server_url_input.clone();
+    let client_host_input_for_connect = client_host_input.clone();
+    let client_port_input_for_connect = client_port_input.clone();
+    let client_host_input_for_sync = client_host_input.clone();
+    let client_port_input_for_sync = client_port_input.clone();
     
     client_button_pack.end();
     client_pack.end();
-    client_group.end();
     
-    // Status section
+    let mut status_title = Frame::default()
+        .with_size(0, 20)
+        .with_label("日志");
+    status_title.set_label_size(14);
+    status_title.set_label_font(Font::HelveticaBold);
+    status_title.set_label_color(Color::from_rgb(40, 40, 40));
+    status_title.set_align(Align::Left | Align::Inside);
+
     let mut status_group = Group::default()
-        .with_size(0, 200)
-        .with_label("Status & Logs");
+        .with_size(780, 170);
+    status_group.set_frame(FrameType::EngravedBox);
     
     let mut status_text = TextDisplay::default()
-        .with_size(0, 180);
+        .with_pos(10, 12)
+        .with_size(760, 146);
     status_text.set_text_font(Font::Courier);
-    status_text.set_text_size(10);
+    status_text.set_text_size(11);
     status_text.set_scrollbar_size(15);
+    status_text.set_frame(FrameType::DownBox);
+    status_text.set_color(Color::from_rgb(252, 250, 246));
     
     status_group.end();
     
@@ -231,7 +316,7 @@ pub fn run_gui() -> Result<()> {
     });
     
     // Create status buffer
-    let mut status_buffer = TextBuffer::default();
+    let status_buffer = TextBuffer::default();
     status_text.set_buffer(status_buffer.clone());
     
     // Helper function to update status
@@ -266,7 +351,7 @@ pub fn run_gui() -> Result<()> {
         let state = state_clone.clone();
         let runtime = runtime_clone.clone();
         let update_status = update_status_for_start.clone();
-        
+
         btn.deactivate();
         stop_server_btn_for_start.activate();
 
@@ -307,12 +392,19 @@ pub fn run_gui() -> Result<()> {
         let state = state_clone.clone();
         let runtime = runtime_clone.clone();
         let update_status = update_status_for_connect.clone();
-        
+
         btn.deactivate();
         disconnect_client_btn_for_connect.activate();
         sync_once_btn_for_connect.deactivate();
         
-        let server_url = server_url_input_for_connect.value();
+        let host_value = client_host_input_for_connect.value();
+        let host = if host_value.trim().is_empty() {
+            "127.0.0.1".to_string()
+        } else {
+            host_value
+        };
+        let port: u16 = client_port_input_for_connect.value().parse().unwrap_or(8080);
+        let server_url = format!("http://{}:{}", host.trim(), port);
         *state.server_url.lock().unwrap() = server_url.clone();
         update_status(&format!("Connecting to server: {}", server_url));
 
@@ -354,7 +446,15 @@ pub fn run_gui() -> Result<()> {
         let runtime = runtime_clone.clone();
         let update_status = update_status_for_sync.clone();
         
-        let server_url = state.server_url.lock().unwrap().clone();
+        let host_value = client_host_input_for_sync.value();
+        let host = if host_value.trim().is_empty() {
+            "127.0.0.1".to_string()
+        } else {
+            host_value
+        };
+        let port: u16 = client_port_input_for_sync.value().parse().unwrap_or(8080);
+        let server_url = format!("http://{}:{}", host.trim(), port);
+        *state.server_url.lock().unwrap() = server_url.clone();
         update_status(&format!("Performing one-time sync with server: {}", server_url));
 
         match runtime.block_on(perform_one_time_sync(server_url)) {

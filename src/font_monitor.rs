@@ -1,13 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::Local;
 use log::{error, info, warn};
-use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::{interval, timeout};
 use walkdir::WalkDir;
 
 use crate::utils::{calculate_sha256, is_font_file};
@@ -289,7 +287,7 @@ impl FontMonitor {
                         path.file_name().unwrap_or_default()
                     );
                     
-                    if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    if path.file_name().and_then(|n| n.to_str()).is_some() {
                         let _ = event_sender.send(FontEvent::Removed(path));
                     }
                 }

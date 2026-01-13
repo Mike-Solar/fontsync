@@ -16,7 +16,7 @@ use warp::{
 };
 
 use crate::utils::{calculate_sha256, get_font_mime_type, is_font_file};
-use crate::websocket_server::{create_font_added_event, create_font_modified_event, WebSocketServer};
+use crate::websocket_server::{create_font_added_event, WebSocketServer};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct FontInfo {
@@ -43,30 +43,19 @@ pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled:
     }
 
     let font_dir_arc = Arc::new(font_dir_path);
-    
-    // Start WebSocket server if enabled
-    let ws_server = if ws_enabled {
+    let ws_server_data = if ws_enabled {
         let ws_addr: SocketAddr = format!("{}:{}", host, port + 1).parse()
             .context("Failed to parse WebSocket address")?;
-        
         let ws_server = Arc::new(WebSocketServer::new(ws_addr));
-        let ws_server_clone = Arc::clone(&ws_server);
-        
-        tokio::spawn(async move {
-            if let Err(e) = ws_server_clone.start().await {
-                error!("WebSocket server error: {}", e);
-            }
-        });
-        
-        info!("WebSocket server listening on ws://{}", ws_addr);
-        Some(ws_server)
+        Some((ws_server, ws_addr))
     } else {
         None
     };
 
     // Routes
     let font_dir_filter = warp::any().map(move || Arc::clone(&font_dir_arc));
-    let ws_server_filter = warp::any().map(move || ws_server.clone());
+    let ws_server_opt = ws_server_data.as_ref().map(|(server, _)| Arc::clone(server));
+    let ws_server_filter = warp::any().map(move || ws_server_opt.clone());
 
     let list_fonts = warp::path!("fonts")
         .and(warp::get())
@@ -101,9 +90,27 @@ pub async fn start_server(host: String, port: u16, font_dir: String, ws_enabled:
         .parse()
         .context("Failed to parse socket address")?;
 
-    info!("HTTP server listening on http://{}", addr);
-    
-    warp::serve(routes).run(addr).await;
+    let shutdown = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    let (bound_addr, server) = warp::serve(routes)
+        .try_bind_with_graceful_shutdown(addr, shutdown)
+        .map_err(|e| anyhow::anyhow!("Failed to bind HTTP server: {}", e))?;
+
+    info!("HTTP server listening on http://{}", bound_addr);
+
+    if let Some((ws_server, ws_addr)) = ws_server_data {
+        let ws_server_clone = Arc::clone(&ws_server);
+        tokio::spawn(async move {
+            if let Err(e) = ws_server_clone.start().await {
+                error!("WebSocket server error: {}", e);
+            }
+        });
+        info!("WebSocket server listening on ws://{}", ws_addr);
+    }
+
+    server.await;
 
     Ok(())
 }
@@ -345,5 +352,111 @@ async fn get_sha256_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::start_server;
+    use crate::client;
+    use crate::websocket_server::WebSocketServer;
+    use std::path::PathBuf;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use tokio::sync::oneshot;
+    use warp::Filter;
+
+    #[tokio::test]
+    async fn start_server_returns_error_when_port_in_use() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test port");
+        let port = listener.local_addr().expect("local addr").port();
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+
+        let result = start_server(
+            "127.0.0.1".to_string(),
+            port,
+            temp_dir.path().to_string_lossy().to_string(),
+            false,
+        )
+        .await;
+
+        assert!(result.is_err(), "expected error when port is in use");
+    }
+
+    #[tokio::test]
+    async fn sync_upload_and_download_smoke() {
+        let server_dir = tempfile::tempdir().expect("server temp dir");
+        let (addr, shutdown) = start_test_http_server(server_dir.path().to_path_buf()).await;
+        let server_url = format!("http://{}", addr);
+
+        let local_dir = tempfile::tempdir().expect("local temp dir");
+        let font_path = local_dir.path().join("test.ttf");
+        tokio::fs::write(&font_path, b"dummy font data")
+            .await
+            .expect("write font");
+
+        let (uploaded, _) = client::upload_local_fonts(&server_url, local_dir.path(), false)
+            .await
+            .expect("upload local fonts");
+        assert_eq!(uploaded, 1);
+        assert!(server_dir.path().join("test.ttf").exists());
+
+        let listed = client::get_server_fonts_with_sha256(&server_url)
+            .await
+            .expect("list server fonts");
+        assert_eq!(listed.fonts.len(), 1);
+        assert_eq!(listed.fonts[0].name, "test.ttf");
+
+        let download_dir = tempfile::tempdir().expect("download temp dir");
+        let _ = client::download_server_fonts(&server_url, download_dir.path(), false)
+            .await
+            .expect("download server fonts");
+
+        let _ = shutdown.send(());
+    }
+
+    async fn start_test_http_server(font_dir: PathBuf) -> (std::net::SocketAddr, oneshot::Sender<()>) {
+        let font_dir_arc = Arc::new(font_dir);
+        let ws_server: Option<Arc<WebSocketServer>> = None;
+
+        let font_dir_filter = warp::any().map(move || Arc::clone(&font_dir_arc));
+        let ws_server_filter = warp::any().map(move || ws_server.clone());
+
+        let list_fonts = warp::path!("fonts")
+            .and(warp::get())
+            .and(font_dir_filter.clone())
+            .and_then(super::list_fonts_handler);
+
+        let download_font = warp::path!("fonts" / String)
+            .and(warp::get())
+            .and(font_dir_filter.clone())
+            .and_then(super::download_font_handler);
+
+        let upload_font = warp::path!("fonts")
+            .and(warp::post())
+            .and(warp::multipart::form().max_length(100 * 1024 * 1024))
+            .and(font_dir_filter.clone())
+            .and(ws_server_filter.clone())
+            .and_then(super::upload_font_handler);
+
+        let get_sha256 = warp::path!("fonts" / String / "sha256")
+            .and(warp::get())
+            .and(font_dir_filter.clone())
+            .and_then(super::get_sha256_handler);
+
+        let routes = list_fonts
+            .or(download_font)
+            .or(upload_font)
+            .or(get_sha256)
+            .with(warp::cors().allow_any_origin());
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (addr, server) = warp::serve(routes)
+            .bind_with_graceful_shutdown(([127, 0, 0, 1], 0), async {
+                let _ = shutdown_rx.await;
+            });
+
+        tokio::spawn(server);
+        (addr, shutdown_tx)
     }
 }

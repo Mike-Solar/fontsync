@@ -131,8 +131,7 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
     let command = cli.command;
     
@@ -147,44 +146,30 @@ async fn main() -> Result<()> {
     
     // Handle GUI mode
     #[cfg(feature = "gui")]
-    if !cli.no_gui {
-        if let Some(Commands::Gui { .. }) = &command {
-            info!("Starting GUI interface...");
-            return gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {}", e));
-        }
-    }
-
-    #[cfg(feature = "gui")]
-    if command.is_none() && !cli.no_gui {
-        info!("Starting GUI interface (default)...");
-        return gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {}", e));
-    }
-
-    #[cfg(feature = "gui")]
-    if command.is_none() && cli.no_gui {
-        return Err(anyhow::anyhow!("No command provided. Use --help for usage."));
-    }
-
-    #[cfg(feature = "gui")]
-    if cli.no_gui {
-        if let Some(Commands::Gui { .. }) = &command {
-            return Err(anyhow::anyhow!("GUI disabled via --no-gui"));
-        }
-    }
-
-    #[cfg(feature = "gui")]
-    if !cli.no_gui {
-        match &command {
-            Some(Commands::Gui { .. }) => {
+    {
+        if !cli.no_gui {
+            if let Some(Commands::Gui { .. }) = &command {
                 info!("Starting GUI interface...");
                 return gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {}", e));
             }
-            _ => {
-                // Check if GUI should be started by default
-                if std::env::var("FONT_SYNC_GUI").is_ok() {
-                    info!("Starting GUI interface (via environment variable)...");
-                    return gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {}", e));
-                }
+
+            if command.is_none() {
+                info!("Starting GUI interface (default)...");
+                return gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {}", e));
+            }
+
+            // Check if GUI should be started by default
+            if std::env::var("FONT_SYNC_GUI").is_ok() {
+                info!("Starting GUI interface (via environment variable)...");
+                return gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {}", e));
+            }
+        } else {
+            if command.is_none() {
+                return Err(anyhow::anyhow!("No command provided. Use --help for usage."));
+            }
+
+            if let Some(Commands::Gui { .. }) = &command {
+                return Err(anyhow::anyhow!("GUI disabled via --no-gui"));
             }
         }
     }
@@ -200,81 +185,80 @@ async fn main() -> Result<()> {
         }
     }
     
-    match command {
-        Some(Commands::Serve { host, port, font_dir, websocket }) => {
-            info!("Starting font server on {}:{}", host, port);
-            info!("Font directory: {}", font_dir);
-            info!("WebSocket enabled: {}", websocket);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async move {
+        match command {
+            Some(Commands::Serve { host, port, font_dir, websocket }) => {
+                info!("Starting font server on {}:{}", host, port);
+                info!("Font directory: {}", font_dir);
+                info!("WebSocket enabled: {}", websocket);
+                
+                if websocket {
+                    server::start_server_with_websocket(host, port, font_dir, true).await?;
+                } else {
+                    server::start_server(host, port, font_dir, false).await?;
+                }
+            }
             
-            if websocket {
-                server::start_server_with_websocket(host, port, font_dir, true).await?;
-            } else {
-                server::start_server(host, port, font_dir, false).await?;
+            Some(Commands::Monitor { server_url, watch_dirs, client_id, interactive: _ }) => {
+                info!("Starting font monitor client");
+                info!("Server URL: {}", server_url);
+                info!("Client ID: {}", client_id);
+                info!("Interactive mode: {}", false);
+                
+                let watch_paths = if let Some(dirs) = watch_dirs {
+                    dirs.into_iter().map(PathBuf::from).collect()
+                } else {
+                    utils::get_system_font_directories()
+                };
+                
+                info!("Monitoring directories: {:?}", watch_paths);
+                
+                run_monitor_client(server_url, watch_paths, client_id, false).await?;
+            }
+            
+            Some(Commands::Sync { server_url, local_dir, interactive, upload, download, install }) => {
+                info!("Performing one-time font synchronization");
+                info!("Server URL: {}", server_url);
+                info!("Local directory: {}", local_dir);
+                info!("Interactive mode: {}", interactive);
+                info!("Upload: {}", upload);
+                info!("Download: {}", download);
+                info!("Install: {}", install);
+                
+                run_sync_command(server_url, local_dir, interactive, upload, download, install).await?;
+            }
+            
+            Some(Commands::Install { font_dir, verbose }) => {
+                info!("Installing fonts from directory: {}", font_dir);
+                run_install_command(font_dir, verbose).await?;
+            }
+            
+            Some(Commands::ListFonts { detailed }) => {
+                run_list_fonts_command(detailed).await?;
+            }
+
+            None => {
+                return Err(anyhow::anyhow!("No command provided. Use --help for usage."));
+            }
+
+            #[cfg(feature = "gui")]
+            Some(Commands::Gui { .. }) => {
+                unreachable!("GUI command handled before async runtime");
+            }
+            
+            #[cfg(not(feature = "gui"))]
+            _ => {
+                // This should not happen because Gui command is not available in non-gui builds
+                unreachable!("GUI command received in non-GUI build");
             }
         }
         
-        Some(Commands::Monitor { server_url, watch_dirs, client_id, interactive: _ }) => {
-            info!("Starting font monitor client");
-            info!("Server URL: {}", server_url);
-            info!("Client ID: {}", client_id);
-            info!("Interactive mode: {}", false);
-            
-            let watch_paths = if let Some(dirs) = watch_dirs {
-                dirs.into_iter().map(PathBuf::from).collect()
-            } else {
-                utils::get_system_font_directories()
-            };
-            
-            info!("Monitoring directories: {:?}", watch_paths);
-            
-            run_monitor_client(server_url, watch_paths, client_id, false).await?;
-        }
-        
-        Some(Commands::Sync { server_url, local_dir, interactive, upload, download, install }) => {
-            info!("Performing one-time font synchronization");
-            info!("Server URL: {}", server_url);
-            info!("Local directory: {}", local_dir);
-            info!("Interactive mode: {}", interactive);
-            info!("Upload: {}", upload);
-            info!("Download: {}", download);
-            info!("Install: {}", install);
-            
-            run_sync_command(server_url, local_dir, interactive, upload, download, install).await?;
-        }
-        
-        Some(Commands::Install { font_dir, verbose }) => {
-            info!("Installing fonts from directory: {}", font_dir);
-            run_install_command(font_dir, verbose).await?;
-        }
-        
-        Some(Commands::ListFonts { detailed }) => {
-            run_list_fonts_command(detailed).await?;
-        }
-
-        None => {
-            return Err(anyhow::anyhow!("No command provided. Use --help for usage."));
-        }
-
-        #[cfg(feature = "gui")]
-        Some(Commands::Gui { server, client, server_url }) => {
-            if server {
-                info!("Starting GUI in server mode");
-            } else if client {
-                info!("Starting GUI in client mode, server URL: {}", server_url);
-            } else {
-                info!("Starting GUI in default mode");
-            }
-            gui::run_gui()?;
-        }
-        
-        #[cfg(not(feature = "gui"))]
-        _ => {
-            // This should not happen because Gui command is not available in non-gui builds
-            unreachable!("GUI command received in non-GUI build");
-        }
-    }
-    
-    Ok(())
+        Ok(())
+    })
 }
 
 async fn run_monitor_client(

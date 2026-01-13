@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 pub fn calculate_sha256(path: &Path) -> Result<String> {
     let mut file = File::open(path)

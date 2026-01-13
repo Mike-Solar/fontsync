@@ -149,9 +149,6 @@ impl WebSocketServer {
             .context("Failed to send welcome message")?;
 
         // Handle incoming messages and outgoing events
-        let clients_clone = Arc::clone(&clients);
-        let addr_clone = addr;
-        
         let mut heartbeat_interval = interval(Duration::from_secs(30));
         
         loop {

@@ -39,3 +39,102 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+      - name: CLI sync + install flow (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVER_DIR="$(mktemp -d)"
+          LOCAL_DIR="$(mktemp -d)"
+          DOWNLOAD_DIR="$(mktemp -d)"
+          FONT_A_SRC="test_fonts/NotoSansTest-Regular.ttf"
+          FONT_B_SRC="test_fonts/NotoSerifTest-Regular.ttf"
+          if [ ! -f "${FONT_A_SRC}" ] || [ ! -f "${FONT_B_SRC}" ]; then
+            echo "Test fonts not found in test_fonts/"
+            exit 1
+          fi
+          FONT_A="FontSyncTestA-$(date +%s).ttf"
+          FONT_B="FontSyncTestB-$(date +%s).ttf"
+          cp "${FONT_A_SRC}" "${LOCAL_DIR}/${FONT_A}"
+          cp "${FONT_B_SRC}" "${SERVER_DIR}/${FONT_B}"
+
+          cargo run -- --no-gui serve --host 127.0.0.1 --port 8080 --font-dir "${SERVER_DIR}" --websocket true &
+          SERVER_PID=$!
+          sleep 2
+          cargo run -- --no-gui monitor --server-url ws://127.0.0.1:8080 &
+          CLIENT_PID=$!
+          sleep 2
+          trap 'kill ${CLIENT_PID} ${SERVER_PID} || true' EXIT
+
+          cargo run -- --no-gui install --font-dir "${LOCAL_DIR}"
+          if [ ! -f "${HOME}/.local/share/fonts/${FONT_A}" ] && [ ! -f "${HOME}/.fonts/${FONT_A}" ]; then
+            echo "Font install failed: ${FONT_A} not found in user fonts"
+            exit 1
+          fi
+
+          cargo run -- --no-gui sync --server-url http://127.0.0.1:8080 --local-dir "${LOCAL_DIR}" --interactive false --upload true --download false --install false
+          if [ ! -f "${SERVER_DIR}/${FONT_A}" ]; then
+            echo "Server missing uploaded font: ${FONT_A}"
+            exit 1
+          fi
+
+          cargo run -- --no-gui sync --server-url http://127.0.0.1:8080 --local-dir "${DOWNLOAD_DIR}" --interactive false --upload false --download true --install true
+          if [ ! -f "${HOME}/.local/share/fonts/${FONT_B}" ] && [ ! -f "${HOME}/.fonts/${FONT_B}" ]; then
+            echo "Font install failed: ${FONT_B} not found in user fonts"
+            exit 1
+          fi
+
+      - name: CLI sync + install flow (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $serverDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "fontsync_server_$([guid]::NewGuid())")
+          $localDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "fontsync_local_$([guid]::NewGuid())")
+          $downloadDir = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP "fontsync_download_$([guid]::NewGuid())")
+          Add-Type -AssemblyName System.Drawing
+          $repoFonts = Get-ChildItem -Path (Join-Path $PWD "test_fonts") -Include *.ttf,*.otf -ErrorAction SilentlyContinue
+          $installedNames = (New-Object System.Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }
+          $selected = @()
+          foreach ($candidate in $repoFonts) {
+            $pfc = New-Object System.Drawing.Text.PrivateFontCollection
+            $pfc.AddFontFile($candidate.FullName)
+            if ($pfc.Families.Count -eq 0) { continue }
+            $family = $pfc.Families[0].Name
+            if ($installedNames -contains $family) { continue }
+            if ($selected | Where-Object { $_.Family -eq $family }) { continue }
+            $selected += [pscustomobject]@{ File = $candidate; Family = $family }
+            if ($selected.Count -ge 2) { break }
+          }
+          if ($selected.Count -lt 2) { throw "No suitable repo fonts found for install test" }
+          $fontA = "FontSyncTestA-$([guid]::NewGuid()).ttf"
+          $fontB = "FontSyncTestB-$([guid]::NewGuid()).ttf"
+          $fontAFamily = $selected[0].Family
+          $fontBFamily = $selected[1].Family
+          Copy-Item -Path $selected[0].File.FullName -Destination (Join-Path $localDir.FullName $fontA)
+          Copy-Item -Path $selected[1].File.FullName -Destination (Join-Path $serverDir.FullName $fontB)
+
+          $server = Start-Process -FilePath cargo -ArgumentList @("run","--","--no-gui","serve","--host","127.0.0.1","--port","8080","--font-dir",$serverDir.FullName,"--websocket","true") -PassThru
+          Start-Sleep -Seconds 2
+          $client = Start-Process -FilePath cargo -ArgumentList @("run","--","--no-gui","monitor","--server-url","ws://127.0.0.1:8080") -PassThru
+          Start-Sleep -Seconds 2
+
+          try {
+            cargo run -- --no-gui install --font-dir "$($localDir.FullName)"
+            $fontsDir = Join-Path $env:WINDIR "Fonts"
+            if (-not (Test-Path (Join-Path $fontsDir $fontA))) { throw "Font install failed: $fontA" }
+            $installed = New-Object System.Drawing.Text.InstalledFontCollection
+            if (-not ($installed.Families.Name -contains $fontAFamily)) { throw "Font not registered: $fontAFamily" }
+
+            cargo run -- --no-gui sync --server-url http://127.0.0.1:8080 --local-dir "$($localDir.FullName)" --interactive false --upload true --download false --install false
+            if (-not (Test-Path (Join-Path $serverDir.FullName $fontA))) { throw "Server missing uploaded font: $fontA" }
+
+            cargo run -- --no-gui sync --server-url http://127.0.0.1:8080 --local-dir "$($downloadDir.FullName)" --interactive false --upload false --download true --install true
+            if (-not (Test-Path (Join-Path $fontsDir $fontB))) { throw "Font install failed: $fontB" }
+            $installed = New-Object System.Drawing.Text.InstalledFontCollection
+            if (-not ($installed.Families.Name -contains $fontBFamily)) { throw "Font not registered: $fontBFamily" }
+          } finally {
+            if ($client -and -not $client.HasExited) { Stop-Process -Id $client.Id }
+            if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id }
+          }

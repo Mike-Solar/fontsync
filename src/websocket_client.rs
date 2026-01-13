@@ -31,16 +31,8 @@ impl WebSocketClient {
     }
 
     pub async fn connect(&mut self) -> Result<()> {
-        let ws_url = self.server_url.replace("http://", "ws://").replace("https://", "wss://");
-        let url = format!("{}/ws", ws_url);
-        
-        info!("Connecting to WebSocket server: {}", url);
-        
-        let (ws_stream, _) = connect_async(&url)
-            .await
-            .context("Failed to connect to WebSocket server")?;
-        
-        info!("Connected to WebSocket server");
+        let (ws_stream, ws_url) = self.connect_ws().await?;
+        info!("Connected to WebSocket server: {}", ws_url);
         
         let (mut ws_sender, _ws_receiver) = ws_stream.split();
         
@@ -60,16 +52,19 @@ impl WebSocketClient {
     }
 
     pub async fn connect_and_run(&mut self) -> Result<()> {
+        let (ws_stream, ws_url) = self.connect_ws().await?;
+        self.run_with_stream(ws_stream, ws_url).await
+    }
+
+    async fn run_with_stream(
+        &mut self,
+        ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        ws_url: String,
+    ) -> Result<()> {
         // Create download directory
         tokio::fs::create_dir_all(&self.download_dir)
             .await
             .context("Failed to create download directory")?;
-
-        // Connect to WebSocket server
-        let ws_url = self.server_url.replace("http://", "ws://").replace("https://", "wss://");
-        let (ws_stream, _) = connect_async(&ws_url)
-            .await
-            .context("Failed to connect to WebSocket server")?;
 
         info!("Connected to WebSocket server: {}", ws_url);
 
@@ -283,6 +278,26 @@ impl WebSocketClient {
         
         Ok(())
     }
+
+    async fn connect_ws(&self) -> Result<(WebSocketStream<MaybeTlsStream<TcpStream>>, String)> {
+        let ws_urls = build_ws_urls(&self.server_url)?;
+        let mut last_err = None;
+
+        for ws_url in ws_urls {
+            info!("Connecting to WebSocket server: {}", ws_url);
+            match connect_async(&ws_url).await {
+                Ok((ws_stream, _)) => return Ok((ws_stream, ws_url)),
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Failed to connect to WebSocket server: {}",
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown error".to_string())
+        ))
+    }
 }
 
 fn calculate_sha256_from_bytes(data: &[u8]) -> Result<String> {
@@ -300,14 +315,54 @@ pub async fn start_websocket_client(
     client_id: String,
 ) -> Result<WebSocketClient> {
     let client = WebSocketClient::new(server_url, client_id);
-    
+
+    let (ws_stream, ws_url) = match client.connect_ws().await {
+        Ok(result) => result,
+        Err(e) => {
+            error!("WebSocket client error: {}", e);
+            return Err(e);
+        }
+    };
+
     // Connect and run in background
     let mut client_clone = client.clone();
     tokio::spawn(async move {
-        if let Err(e) = client_clone.connect_and_run().await {
+        if let Err(e) = client_clone.run_with_stream(ws_stream, ws_url).await {
             error!("WebSocket client error: {}", e);
         }
     });
     
     Ok(client)
+}
+
+fn build_ws_urls(server_url: &str) -> Result<Vec<String>> {
+    let mut url = reqwest::Url::parse(server_url)
+        .or_else(|_| reqwest::Url::parse(&format!("ws://{}", server_url)))
+        .context("Invalid server URL")?;
+
+    match url.scheme() {
+        "http" => {
+            url.set_scheme("ws").map_err(|_| anyhow::anyhow!("Invalid URL scheme"))?;
+        }
+        "https" => {
+            url.set_scheme("wss").map_err(|_| anyhow::anyhow!("Invalid URL scheme"))?;
+        }
+        "ws" | "wss" => {}
+        _ => return Err(anyhow::anyhow!("Unsupported URL scheme")),
+    }
+
+    let mut urls = vec![url.to_string()];
+    if let Some(port) = url.port() {
+        if let Some(next_port) = port.checked_add(1) {
+            let mut alt = url.clone();
+            if alt.set_port(Some(next_port)).is_ok() {
+                let alt_str = alt.to_string();
+                if alt_str != urls[0] {
+                    urls.push(alt_str);
+                }
+            }
+        }
+    }
+
+    Ok(urls)
 }
