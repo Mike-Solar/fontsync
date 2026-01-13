@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use log::{error, info};
 use std::path::Path;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::process::Command;
 
 pub async fn install_font(font_path: &Path) -> Result<()> {
@@ -50,8 +51,7 @@ pub async fn install_fonts_from_directory(dir_path: &Path) -> Result<(usize, usi
 async fn install_font_windows(font_path: &Path) -> Result<()> {
     use std::fs;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_SET_VALUE,
-        REG_OPTION_NON_VOLATILE, REG_SZ,
+        RegCloseKey, RegCreateKeyW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, REG_SZ,
     };
 
     info!("Installing font on Windows: {:?}", font_path);
@@ -77,19 +77,7 @@ async fn install_font_windows(font_path: &Path) -> Result<()> {
     let mut key: HKEY = 0;
     let subkey = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts";
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let status = unsafe {
-        RegCreateKeyExW(
-            HKEY_LOCAL_MACHINE,
-            subkey_wide.as_ptr(),
-            0,
-            std::ptr::null_mut(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
-            std::ptr::null(),
-            &mut key,
-            std::ptr::null_mut(),
-        )
-    };
+    let status = unsafe { RegCreateKeyW(HKEY_LOCAL_MACHINE, subkey_wide.as_ptr(), &mut key) };
     if status != 0 {
         return Err(anyhow::anyhow!("Failed to open fonts registry key: {}", status));
     }

@@ -15,6 +15,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
+#[cfg(feature = "tray")]
 use tray_item::{IconSource, TrayItem};
 
 const LOGO_PNG: &[u8] = include_bytes!("../logo.png");
@@ -130,7 +131,7 @@ fn set_window_icon_windows(window: &mut Window) {
     }
 }
 
-#[cfg(any(target_os = "macos", all(target_os = "linux", feature = "ksni")))]
+#[cfg(all(feature = "tray", any(target_os = "macos", all(target_os = "linux", feature = "ksni"))))]
 fn png_to_tray_icon_data(png: &PngImage) -> Option<IconSource> {
     let icon = png.copy_sized(TRAY_ICON_SIZE, TRAY_ICON_SIZE);
     let depth = icon.depth();
@@ -156,7 +157,7 @@ fn png_to_tray_icon_data(png: &PngImage) -> Option<IconSource> {
     })
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "tray", target_os = "windows"))]
 fn tray_icon_source() -> Option<IconSource> {
     if let Some(hicon) = png_to_hicon(LOGO_PNG) {
         return Some(IconSource::RawIcon(hicon));
@@ -167,7 +168,7 @@ fn tray_icon_source() -> Option<IconSource> {
     if icon == 0 { None } else { Some(IconSource::RawIcon(icon)) }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(feature = "tray", not(target_os = "windows")))]
 fn tray_icon_source() -> Option<IconSource> {
     let png = load_logo_png()?;
     #[cfg(any(target_os = "macos", all(target_os = "linux", feature = "ksni")))]
@@ -183,6 +184,11 @@ fn tray_icon_source() -> Option<IconSource> {
         let _ = png;
         None
     }
+}
+
+#[cfg(not(feature = "tray"))]
+fn tray_icon_source() -> Option<()> {
+    None
 }
 
 use crate::utils::get_system_font_directories;
@@ -213,6 +219,50 @@ enum TrayEvent {
     Show,
     Hide,
     Quit,
+}
+
+#[cfg(feature = "tray")]
+struct TrayHandle {
+    tray: Option<TrayItem>,
+}
+
+#[cfg(not(feature = "tray"))]
+struct TrayHandle;
+
+#[cfg(feature = "tray")]
+fn init_tray() -> (app::Sender<TrayEvent>, app::Receiver<TrayEvent>, bool, TrayHandle) {
+    let (tray_sender, tray_receiver) = app::channel::<TrayEvent>();
+    let mut tray = match tray_icon_source() {
+        Some(icon) => match TrayItem::new("FontSync", icon) {
+            Ok(tray) => Some(tray),
+            Err(e) => {
+                eprintln!("Failed to create tray icon: {}", e);
+                None
+            }
+        },
+        None => {
+            eprintln!("Failed to create tray icon");
+            None
+        }
+    };
+    let tray_enabled = tray.is_some();
+
+    if let Some(tray) = tray.as_mut() {
+        let sender = tray_sender;
+        let _ = tray.add_menu_item("Show", move || sender.send(TrayEvent::Show));
+        let sender = tray_sender;
+        let _ = tray.add_menu_item("Hide", move || sender.send(TrayEvent::Hide));
+        let sender = tray_sender;
+        let _ = tray.add_menu_item("Quit", move || sender.send(TrayEvent::Quit));
+    }
+
+    (tray_sender, tray_receiver, tray_enabled, TrayHandle { tray })
+}
+
+#[cfg(not(feature = "tray"))]
+fn init_tray() -> (app::Sender<TrayEvent>, app::Receiver<TrayEvent>, bool, TrayHandle) {
+    let (tray_sender, tray_receiver) = app::channel::<TrayEvent>();
+    (tray_sender, tray_receiver, false, TrayHandle)
 }
 
 pub fn run_gui() -> Result<()> {
@@ -439,30 +489,7 @@ pub fn run_gui() -> Result<()> {
     wind.end();
     wind.show();
 
-    let (tray_sender, tray_receiver) = app::channel::<TrayEvent>();
-    let mut tray = match tray_icon_source() {
-        Some(icon) => match TrayItem::new("FontSync", icon) {
-            Ok(tray) => Some(tray),
-            Err(e) => {
-                eprintln!("Failed to create tray icon: {}", e);
-                None
-            }
-        },
-        None => {
-            eprintln!("Failed to create tray icon");
-            None
-        }
-    };
-    let tray_enabled = tray.is_some();
-
-    if let Some(tray) = tray.as_mut() {
-        let sender = tray_sender;
-        let _ = tray.add_menu_item("Show", move || sender.send(TrayEvent::Show));
-        let sender = tray_sender;
-        let _ = tray.add_menu_item("Hide", move || sender.send(TrayEvent::Hide));
-        let sender = tray_sender;
-        let _ = tray.add_menu_item("Quit", move || sender.send(TrayEvent::Quit));
-    }
+    let (tray_sender, tray_receiver, tray_enabled, _tray_handle) = init_tray();
 
     let tray_sender_for_close = tray_sender;
     wind.set_callback(move |w| {

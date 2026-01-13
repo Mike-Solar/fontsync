@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/fontsync serve --host 0.0.0.0 --port 8080 --font-dir /var/lib/fontsync/fonts
+ExecStart=/usr/local/bin/fontsync-server serve --host 0.0.0.0 --port 8080 --font-dir /var/lib/fontsync/fonts
 Restart=on-failure
 RestartSec=5s
 User=fontsync

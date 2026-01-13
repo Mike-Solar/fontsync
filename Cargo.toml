@@ -3,7 +3,7 @@ name = "fontsync"
 version = "0.1.0"
 edition = "2024"
 description = "Font synchronization tool with HTTP server and client"
-authors = ["Your Name"]
+authors = ["Mike Solar"]
 license = "AGPL-3.0-only"
 
 [dependencies]
@@ -43,18 +43,20 @@ openssl = { version = "0.10", features = ["vendored"] }
 uuid = { version = "1.0", features = ["v4"] }
 image = { version = "0.24", default-features = false, features = ["png"] }
 [target.'cfg(target_os = "linux")'.dependencies]
-tray-item = { version = "0.10.0", features = ["ksni"] }
+tray-item = { version = "0.10.0", features = ["ksni"], optional = true }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-tray-item = "0.10.0"
+tray-item = { version = "0.10.0", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.52.0", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_System_Registry"] }
 
 [features]
-default = ["gui"]
+default = ["gui", "tray"]
 gui = ["fltk"]
+tray = ["tray-item"]
 libappindicator = []
+ksni = []
 
 [dependencies.fltk]
 version = "1.4"
@@ -67,7 +69,7 @@ embed-resource = "2.4"
 [package.metadata.deb]
 section = "utils"
 priority = "optional"
-maintainer = "FontSync <noreply@example.com>"
+maintainer = "iam@mikesolar.cn"
 assets = [
   ["target/release/fontsync", "usr/bin/fontsync", "755"],
   ["packaging/linux/fontsync.desktop", "usr/share/applications/fontsync.desktop", "644"],
