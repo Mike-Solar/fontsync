@@ -80,29 +80,18 @@ jobs:
 
           # rpm
           cargo generate-rpm --target ${{ matrix.target_gnu }} -o dist/
-
-          # Arch pkg.tar.zst (in container)
-          mkdir -p packaging/arch
-          cp "$GUI_BIN" packaging/arch/fontsync
-          PKGVER="${GITHUB_REF_NAME#v}"
-          PKG_SHA256="$(sha256sum packaging/arch/fontsync | awk '{print $1}')"
-          sed -e "s/__PKGVER__/${PKGVER}/" -e "s/__PKG_SHA256__/${PKG_SHA256}/" packaging/arch/PKGBUILD.in > packaging/arch/PKGBUILD
-          docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -lc "\
-            pacman -Sy --noconfirm base-devel zstd dbus pkgconf \
-              libx11 libxext libxinerama libxcursor libxrender libxfixes libxft \
-              fontconfig pango cairo glib2 musl patchelf desktop-file-utils \
-              fakeroot fuse2 && \
-            useradd -m build && \
-            chown -R build:build /work && \
-            su build -c 'cd packaging/arch && makepkg -f --nodeps --noconfirm' \
-          "
-          mv packaging/arch/*.pkg.tar.zst dist/
                       
       - name: Upload Artifacts (Linux)
         uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
           path: dist/*
+
+      - name: Upload GUI Binary (Linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-gui-bin-${{ matrix.arch }}
+          path: target/${{ matrix.target_gnu }}/release/fontsync
             
   windows:
     runs-on: windows-latest
@@ -140,14 +129,52 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
-    needs: [linux, windows]
+    needs: [linux, windows, archlinux]
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+          merge-multiple: true
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
+
+  archlinux:
+    runs-on: ubuntu-22.04
+    container: archlinux:latest
+    needs: linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (Arch)
+        run: |
+          pacman -Sy --noconfirm base-devel zstd dbus pkgconf \
+            libx11 libxext libxinerama libxcursor libxrender libxfixes libxft \
+            fontconfig pango cairo glib2 musl patchelf desktop-file-utils \
+            fakeroot fuse2
+
+      - name: Download GUI Binary (Linux)
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-gui-bin-amd64
+          path: packaging/arch
+
+      - name: Package (Arch)
+        shell: bash
+        run: |
+          PKGVER="${GITHUB_REF_NAME#v}"
+          PKG_SHA256="$(sha256sum packaging/arch/fontsync | awk '{print $1}')"
+          sed -e "s/__PKGVER__/${PKGVER}/" -e "s/__PKG_SHA256__/${PKG_SHA256}/" packaging/arch/PKGBUILD.in > packaging/arch/PKGBUILD
+          useradd -m build
+          chown -R build:build packaging/arch
+          su build -c 'cd packaging/arch && makepkg -f --nodeps --noconfirm'
+
+      - name: Upload Artifacts (Arch)
+        uses: actions/upload-artifact@v4
+        with:
+          name: archlinux-x86_64
+          path: packaging/arch/*.pkg.tar.zst
