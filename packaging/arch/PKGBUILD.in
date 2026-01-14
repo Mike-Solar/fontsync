@@ -1,16 +1,16 @@
 pkgname=fontsync
-pkgver=0.1.0
+pkgver=__PKGVER__
 pkgrel=1
 pkgdesc="Font synchronization tool with GUI"
 arch=('x86_64')
 url="https://github.com/yourname/fontsync"
 license=('AGPL3')
 depends=('glibc')
-source=()
-sha256sums=()
+source=('fontsync')
+sha256sums=('__PKG_SHA256__')
 
 package() {
-  install -Dm755 "src/fontsync" "$pkgdir/usr/bin/fontsync"
+  install -Dm755 "$srcdir/fontsync" "$pkgdir/usr/bin/fontsync"
   install -Dm644 "../linux/fontsync.desktop" "$pkgdir/usr/share/applications/fontsync.desktop"
   install -Dm644 "../linux/fontsync.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/fontsync.svg"
 }

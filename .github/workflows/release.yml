@@ -18,11 +18,6 @@ jobs:
           - arch: amd64
             target_gnu: x86_64-unknown-linux-gnu
             target_musl: x86_64-unknown-linux-musl
-            use_cross: false
-          - arch: arm64
-            target_gnu: aarch64-unknown-linux-gnu
-            target_musl: aarch64-unknown-linux-musl
-            use_cross: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,25 +57,11 @@ jobs:
           cargo install cargo-deb --locked
           cargo install cargo-generate-rpm --locked
 
-      - name: Install cross (Linux arm64)
-        if: matrix.use_cross
-        run: cargo install cross --locked
-
       - name: Build release (CLI, musl, static)
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --no-default-features --target ${{ matrix.target_musl }}
-          else
-            cargo build --release --no-default-features --target ${{ matrix.target_musl }}
-          fi
+        run: cargo build --release --no-default-features --target ${{ matrix.target_musl }}
 
       - name: Build release (GUI, glibc)
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target_gnu }}
-          else
-            cargo build --release
-          fi
+        run: cargo build --release --target ${{ matrix.target_gnu }}
 
       - name: Package (Linux)
         shell: bash
@@ -88,65 +69,35 @@ jobs:
           mkdir -p dist
 
           CLI_BIN="target/${{ matrix.target_musl }}/release/fontsync"
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            GUI_BIN="target/release/fontsync"
-            ARCH_PLATFORM="linux/amd64"
-          else
-            GUI_BIN="target/${{ matrix.target_gnu }}/release/fontsync"
-            ARCH_PLATFORM="linux/arm64"
-          fi
+          GUI_BIN="target/${{ matrix.target_gnu }}/release/fontsync"
 
           cp "$CLI_BIN" dist/fontsync-server
           zip -j dist/fontsync-linux-server-${{ matrix.arch }}.zip dist/fontsync-server
 
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            mkdir -p target/release
-            cp "$GUI_BIN" target/release/fontsync
-          fi
-
           # deb
           cargo deb --no-build --target ${{ matrix.target_gnu }}
-          mv target/debian/*.deb dist/
+          mv target/${{ matrix.target_gnu }}/debian/*.deb dist/
 
           # rpm
           cargo generate-rpm --target ${{ matrix.target_gnu }} -o dist/
 
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            # Arch pkg.tar.zst (in container)
-            mkdir -p packaging/arch
-            cp "$GUI_BIN" packaging/arch/fontsync
-            PKGVER="${GITHUB_REF_NAME#v}"
-            PKG_SHA256="$(sha256sum packaging/arch/fontsync | awk '{print $1}')"
-            cat > packaging/arch/PKGBUILD <<EOF
-            pkgname=fontsync
-            pkgver=${PKGVER}
-            pkgrel=1
-            pkgdesc="Font synchronization tool with GUI"
-            arch=('x86_64')
-            url="https://github.com/yourname/fontsync"
-            license=('AGPL3')
-            depends=('glibc')
-            source=('fontsync')
-            sha256sums=('${PKG_SHA256}')
-            
-            package() {
-              install -Dm755 "\$srcdir/fontsync" "\$pkgdir/usr/bin/fontsync"
-              install -Dm644 "../linux/fontsync.desktop" "\$pkgdir/usr/share/applications/fontsync.desktop"
-              install -Dm644 "../linux/fontsync.svg" "\$pkgdir/usr/share/icons/hicolor/scalable/apps/fontsync.svg"
-            }
-            EOF
-            docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -lc "\
-              pacman -Sy --noconfirm base-devel zstd dbus pkgconf \
-                libx11 libxext libxinerama libxcursor libxrender libxfixes libxft \
-                fontconfig pango cairo glib2 musl patchelf desktop-file-utils \
-                fakeroot fuse2 && \
-              useradd -m build && \
-              chown -R build:build /work && \
-              su build -c 'cd packaging/arch && makepkg -f --nodeps --noconfirm' \
-            "
-            mv packaging/arch/*.pkg.tar.zst dist/
-          fi
-            
+          # Arch pkg.tar.zst (in container)
+          mkdir -p packaging/arch
+          cp "$GUI_BIN" packaging/arch/fontsync
+          PKGVER="${GITHUB_REF_NAME#v}"
+          PKG_SHA256="$(sha256sum packaging/arch/fontsync | awk '{print $1}')"
+          sed -e "s/__PKGVER__/${PKGVER}/" -e "s/__PKG_SHA256__/${PKG_SHA256}/" packaging/arch/PKGBUILD.in > packaging/arch/PKGBUILD
+          docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -lc "\
+            pacman -Sy --noconfirm base-devel zstd dbus pkgconf \
+              libx11 libxext libxinerama libxcursor libxrender libxfixes libxft \
+              fontconfig pango cairo glib2 musl patchelf desktop-file-utils \
+              fakeroot fuse2 && \
+            useradd -m build && \
+            chown -R build:build /work && \
+            su build -c 'cd packaging/arch && makepkg -f --nodeps --noconfirm' \
+          "
+          mv packaging/arch/*.pkg.tar.zst dist/
+                      
       - name: Upload Artifacts (Linux)
         uses: actions/upload-artifact@v4
         with:
@@ -162,9 +113,6 @@ jobs:
           - arch: x86_64
             target: x86_64-pc-windows-msvc
             artifact: fontsync-windows-x86_64.zip
-          - arch: aarch64
-            target: aarch64-pc-windows-msvc
-            artifact: fontsync-windows-aarch64.zip
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -175,8 +123,6 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release
-        env:
-          RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Windows)
